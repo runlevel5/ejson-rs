@@ -127,18 +127,21 @@ jobs:
       - name: Install cross-compilation tools (Linux ARM musl)
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: |
-          curl -sSLO https://more.musl.cc/x86_64-linux-musl/aarch64-linux-musl-cross.tgz
-          curl -sSLO https://more.musl.cc/x86_64-linux-musl/SHA512SUMS
-          sha512sum -c --ignore-missing SHA512SUMS
-          tar xzf aarch64-linux-musl-cross.tgz
-          rm -f aarch64-linux-musl-cross.tgz SHA512SUMS
-          echo "$PWD/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
+          TOOLCHAIN_NAME="aarch64--musl--stable-2025.08-1"
+          TOOLCHAIN_URL="https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/${TOOLCHAIN_NAME}.tar.xz"
+          CHECKSUM_URL="https://toolchains.bootlin.com/downloads/releases/toolchains/aarch64/tarballs/${TOOLCHAIN_NAME}.sha256"
+          curl -sSL --max-time 300 -o "${TOOLCHAIN_NAME}.tar.xz" "$TOOLCHAIN_URL"
+          curl -sSL --max-time 30 -o "${TOOLCHAIN_NAME}.sha256" "$CHECKSUM_URL"
+          sha256sum -c "${TOOLCHAIN_NAME}.sha256"
+          tar xf "${TOOLCHAIN_NAME}.tar.xz"
+          rm -f "${TOOLCHAIN_NAME}.tar.xz" "${TOOLCHAIN_NAME}.sha256"
+          echo "$PWD/${TOOLCHAIN_NAME}/bin" >> $GITHUB_PATH
 
       - name: Configure cross-compilation (Linux ARM musl)
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: |
           echo '[target.aarch64-unknown-linux-musl]' >> ~/.cargo/config.toml
-          echo 'linker = "aarch64-linux-musl-gcc"' >> ~/.cargo/config.toml
+          echo 'linker = "aarch64-buildroot-linux-musl-gcc"' >> ~/.cargo/config.toml
 
       - name: Install cross-compilation tools (Linux ppc64le)
         if: matrix.target == 'powerpc64le-unknown-linux-gnu'
@@ -155,18 +158,21 @@ jobs:
       - name: Install cross-compilation tools (Linux ppc64le musl)
         if: matrix.target == 'powerpc64le-unknown-linux-musl'
         run: |
-          curl -sSLO https://more.musl.cc/x86_64-linux-musl/powerpc64le-linux-musl-cross.tgz
-          curl -sSLO https://more.musl.cc/x86_64-linux-musl/SHA512SUMS
-          sha512sum -c --ignore-missing SHA512SUMS
-          tar xzf powerpc64le-linux-musl-cross.tgz
-          rm -f powerpc64le-linux-musl-cross.tgz SHA512SUMS
-          echo "$PWD/powerpc64le-linux-musl-cross/bin" >> $GITHUB_PATH
+          TOOLCHAIN_NAME="powerpc64le-power8--musl--stable-2025.08-1"
+          TOOLCHAIN_URL="https://toolchains.bootlin.com/downloads/releases/toolchains/powerpc64le-power8/tarballs/${TOOLCHAIN_NAME}.tar.xz"
+          CHECKSUM_URL="https://toolchains.bootlin.com/downloads/releases/toolchains/powerpc64le-power8/tarballs/${TOOLCHAIN_NAME}.sha256"
+          curl -sSL --max-time 300 -o "${TOOLCHAIN_NAME}.tar.xz" "$TOOLCHAIN_URL"
+          curl -sSL --max-time 30 -o "${TOOLCHAIN_NAME}.sha256" "$CHECKSUM_URL"
+          sha256sum -c "${TOOLCHAIN_NAME}.sha256"
+          tar xf "${TOOLCHAIN_NAME}.tar.xz"
+          rm -f "${TOOLCHAIN_NAME}.tar.xz" "${TOOLCHAIN_NAME}.sha256"
+          echo "$PWD/${TOOLCHAIN_NAME}/bin" >> $GITHUB_PATH
 
       - name: Configure cross-compilation (Linux ppc64le musl)
         if: matrix.target == 'powerpc64le-unknown-linux-musl'
         run: |
           echo '[target.powerpc64le-unknown-linux-musl]' >> ~/.cargo/config.toml
-          echo 'linker = "powerpc64le-linux-musl-gcc"' >> ~/.cargo/config.toml
+          echo 'linker = "powerpc64le-buildroot-linux-musl-gcc"' >> ~/.cargo/config.toml
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -187,7 +193,6 @@ jobs:
         run: |
           cd target/${{ matrix.target }}/release
           tar cJvf ../../../ejson-${{ needs.check-version.outputs.version }}-${{ matrix.target }}.tar.xz ejson
-          cd ../../..
 
       - name: Prepare archive (Windows)
         if: matrix.os == 'windows-latest'
@@ -195,7 +200,6 @@ jobs:
         run: |
           cd target/${{ matrix.target }}/release
           Compress-Archive -Path ejson.exe -DestinationPath ../../../ejson-${{ needs.check-version.outputs.version }}-${{ matrix.target }}.zip
-          cd ../../..
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
