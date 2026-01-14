@@ -155,7 +155,7 @@ where
             let is_comment = key.starts_with('_');
 
             // Output the key as-is
-            output.push('"' as u8);
+            output.push(b'"');
             for c in key.chars() {
                 if c == '"' {
                     output.extend_from_slice(b"\\\"");
@@ -172,7 +172,7 @@ where
                     output.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
                 }
             }
-            output.push('"' as u8);
+            output.push(b'"');
 
             self.skip_whitespace(chars, i, output);
 
@@ -258,22 +258,22 @@ where
 
         if is_comment {
             // Don't encrypt, output as-is
-            output.push('"' as u8);
+            output.push(b'"');
             // Re-escape the string properly
             let escaped = escape_json_string(&string_content);
             output.extend_from_slice(escaped.as_bytes());
-            output.push('"' as u8);
+            output.push(b'"');
         } else {
             // Apply the action (encrypt/decrypt)
             let result =
-                (self.action)(string_content.as_bytes()).map_err(|e| JsonError::ActionFailed(e))?;
+                (self.action)(string_content.as_bytes()).map_err(JsonError::ActionFailed)?;
 
             // Output the result as a JSON string
             let result_str = String::from_utf8_lossy(&result);
-            output.push('"' as u8);
+            output.push(b'"');
             let escaped = escape_json_string(&result_str);
             output.extend_from_slice(escaped.as_bytes());
-            output.push('"' as u8);
+            output.push(b'"');
         }
 
         Ok(())
