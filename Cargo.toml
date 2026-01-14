@@ -1,6 +1,6 @@
 [package]
 name = "ejson"
-version = "0.0.4"
+version = "0.0.5"
 edition = "2021"
 authors = ["Trung Lê <8@tle.id.au>"]
 description = "Manage encrypted secrets using public key encryption"
