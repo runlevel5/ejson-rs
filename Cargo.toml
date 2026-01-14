@@ -15,32 +15,32 @@ crypto_box = "0.9"
 rand = "0.8"
 
 # CLI
-clap = { version = "4", features = ["derive", "env"] }
+clap = { version = "4.5", features = ["derive", "env"] }
 
 # JSON
-serde_json = "1"
+serde_json = "1.0"
 
 # TOML
-toml = "0.8"
-toml_edit = "0.22"
+toml = "0.9"
+toml_edit = "0.24"
 
 # YAML
-serde = { version = "1", features = ["derive"] }
-serde_yaml = "0.9"
+serde = { version = "1.0", features = ["derive"] }
+serde_yml = "0.0.12"
 
 # Encoding
 base64 = "0.22"
 hex = "0.4"
 
 # Error handling
-thiserror = "1"
-anyhow = "1"
+thiserror = "2.0"
+anyhow = "1.0"
 
 # Regex for message parsing
-regex = "1"
+regex = "1.12"
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = "3.24"
 
 [[bin]]
 name = "ejson"

@@ -4,9 +4,9 @@
 //! - Extract the public key from an eyaml document
 //! - Walk the YAML tree and selectively encrypt/decrypt string values
 //!
-//! The walker uses `serde_yaml` for parsing and serialization.
+//! The walker uses `serde_yml` for parsing and serialization.
 
-use serde_yaml::{Mapping, Value};
+use serde_yml::{Mapping, Value};
 use thiserror::Error;
 
 /// The key name at which the public key should be stored in an EYAML document.
@@ -31,7 +31,7 @@ pub enum YamlError {
 /// Extract the _public_key value from an EYAML document.
 pub fn extract_public_key(data: &[u8]) -> Result<[u8; 32], YamlError> {
     let s = String::from_utf8_lossy(data);
-    let doc: Value = serde_yaml::from_str(&s).map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
+    let doc: Value = serde_yml::from_str(&s).map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
 
     let key_value = doc
         .get(PUBLIC_KEY_FIELD)
@@ -80,13 +80,13 @@ where
     pub fn walk(&self, data: &[u8]) -> Result<Vec<u8>, YamlError> {
         let s = String::from_utf8_lossy(data);
         let mut doc: Value =
-            serde_yaml::from_str(&s).map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
+            serde_yml::from_str(&s).map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
 
         // Process the document
         self.walk_value(&mut doc, false)?;
 
         let output =
-            serde_yaml::to_string(&doc).map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
+            serde_yml::to_string(&doc).map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
         Ok(output.into_bytes())
     }
 
