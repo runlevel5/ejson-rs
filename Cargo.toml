@@ -1,12 +1,12 @@
 [package]
 name = "ejson"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 authors = ["Trung Lê <8@tle.id.au>"]
 description = "Manage encrypted secrets using public key encryption"
 license = "MIT"
 repository = "https://github.com/runlevel5/ejson-rs"
-keywords = ["encryption", "secrets", "json", "toml", "nacl"]
+keywords = ["encryption", "secrets", "json", "toml", "yaml", "nacl"]
 categories = ["cryptography", "command-line-utilities"]
 
 [dependencies]
@@ -23,6 +23,10 @@ serde_json = "1"
 # TOML
 toml = "0.8"
 toml_edit = "0.22"
+
+# YAML
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
 
 # Encoding
 base64 = "0.22"

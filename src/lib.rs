@@ -3,13 +3,14 @@
 //! This crate provides utilities for managing encrypted secrets in source control
 //! using public-key cryptography (NaCl Box).
 //!
-//! Supports both JSON (.ejson, .json) and TOML (.etoml, .toml) file formats.
+//! Supports JSON (.ejson, .json), TOML (.etoml, .toml), and YAML (.eyaml, .yaml, .yml) file formats.
 
 pub mod boxed_message;
 pub mod crypto;
 pub mod format;
 pub mod json;
 pub mod toml;
+pub mod yaml;
 
 use std::fs;
 use std::io::{Read, Write};
@@ -20,6 +21,7 @@ use format::FileFormat;
 use json::JsonError;
 use thiserror::Error;
 use toml::TomlError;
+use yaml::YamlError;
 
 /// Errors that can occur during ejson operations.
 #[derive(Error, Debug)]
@@ -32,6 +34,9 @@ pub enum EjsonError {
 
     #[error("toml error: {0}")]
     Toml(#[from] TomlError),
+
+    #[error("yaml error: {0}")]
+    Yaml(#[from] YamlError),
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -117,6 +122,22 @@ fn encrypt_data<W: Write>(
 
             // Walk and encrypt
             let walker = toml::Walker::new(|plaintext: &[u8]| {
+                encrypter.encrypt(plaintext).map_err(|e| e.to_string())
+            });
+
+            let new_data = walker.walk(data)?;
+            output.write_all(&new_data)?;
+            Ok(new_data.len())
+        }
+        FileFormat::Yaml => {
+            // Extract the public key from the document
+            let pubkey = yaml::extract_public_key(data)?;
+
+            // Create encrypter
+            let encrypter = my_kp.encrypter(pubkey);
+
+            // Walk and encrypt
+            let walker = yaml::Walker::new(|plaintext: &[u8]| {
                 encrypter.encrypt(plaintext).map_err(|e| e.to_string())
             });
 
@@ -238,6 +259,30 @@ fn decrypt_data<W: Write>(
 
             // Walk and decrypt
             let walker = toml::Walker::new(|ciphertext: &[u8]| {
+                // Only decrypt if it looks like an encrypted message
+                if boxed_message::is_boxed_message(ciphertext) {
+                    decrypter.decrypt(ciphertext).map_err(|e| e.to_string())
+                } else {
+                    Ok(ciphertext.to_vec())
+                }
+            });
+
+            let new_data = walker.walk(data)?;
+            output.write_all(&new_data)?;
+        }
+        FileFormat::Yaml => {
+            // Extract the public key from the document
+            let pubkey = yaml::extract_public_key(data)?;
+
+            // Find the private key
+            let privkey = find_private_key(&pubkey, keydir, user_supplied_private_key)?;
+
+            // Create decrypter
+            let kp = Keypair::from_keys(pubkey, privkey);
+            let decrypter = kp.decrypter();
+
+            // Walk and decrypt
+            let walker = yaml::Walker::new(|ciphertext: &[u8]| {
                 // Only decrypt if it looks like an encrypted message
                 if boxed_message::is_boxed_message(ciphertext) {
                     decrypter.decrypt(ciphertext).map_err(|e| e.to_string())
@@ -434,6 +479,85 @@ secret = "my secret"
 
         // Read and verify
         let encrypted = fs::read_to_string(&etoml_path).unwrap();
+        assert!(encrypted.contains("EJ["));
+        assert!(!encrypted.contains("my secret"));
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_yaml_roundtrip() {
+        // Generate a keypair
+        let kp = Keypair::generate().unwrap();
+        let pub_hex = kp.public_string();
+        let priv_hex = kp.private_string();
+
+        // Create a temporary keydir
+        let temp_dir = TempDir::new().unwrap();
+        let keydir = temp_dir.path().to_str().unwrap();
+
+        // Write the private key to the keydir
+        let key_file = format!("{}/{}", keydir, pub_hex);
+        fs::write(&key_file, &priv_hex).unwrap();
+
+        // Create test YAML
+        let yaml_content = format!(
+            r#"_public_key: "{}"
+secret: "my secret value"
+_comment: "not encrypted"
+
+database:
+  password: "db_password"
+  _hint: "password hint"
+"#,
+            pub_hex
+        );
+
+        // Encrypt
+        let mut encrypted = Vec::new();
+        encrypt_with_format(yaml_content.as_bytes(), &mut encrypted, FileFormat::Yaml).unwrap();
+        let encrypted_str = String::from_utf8_lossy(&encrypted);
+
+        // Verify encryption happened
+        assert!(encrypted_str.contains("EJ["));
+        assert!(!encrypted_str.contains("my secret value"));
+        assert!(!encrypted_str.contains("db_password"));
+        assert!(encrypted_str.contains("not encrypted")); // Comment should not be encrypted
+        assert!(encrypted_str.contains("password hint")); // Underscore key should not be encrypted
+
+        // Decrypt
+        let mut decrypted = Vec::new();
+        decrypt_with_format(&encrypted[..], &mut decrypted, keydir, "", FileFormat::Yaml).unwrap();
+        let decrypted_str = String::from_utf8_lossy(&decrypted);
+
+        // Verify decryption
+        assert!(decrypted_str.contains("my secret value"));
+        assert!(decrypted_str.contains("db_password"));
+        assert!(!decrypted_str.contains("EJ["));
+    }
+
+    #[test]
+    fn test_format_detection_in_encrypt_yaml_file() {
+        // Generate a keypair
+        let kp = Keypair::generate().unwrap();
+        let pub_hex = kp.public_string();
+
+        // Create a temporary directory
+        let temp_dir = TempDir::new().unwrap();
+
+        // Test with .eyaml extension
+        let eyaml_path = temp_dir.path().join("secrets.eyaml");
+        let yaml_content = format!(
+            r#"_public_key: "{}"
+secret: "my secret"
+"#,
+            pub_hex
+        );
+        fs::write(&eyaml_path, &yaml_content).unwrap();
+
+        // Encrypt
+        encrypt_file_in_place(&eyaml_path).unwrap();
+
+        // Read and verify
+        let encrypted = fs::read_to_string(&eyaml_path).unwrap();
         assert!(encrypted.contains("EJ["));
         assert!(!encrypted.contains("my secret"));
     }

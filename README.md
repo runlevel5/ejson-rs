@@ -11,7 +11,7 @@ curve](http://en.wikipedia.org/wiki/Elliptic_curve_cryptography) cryptography
 [Curve25519](http://en.wikipedia.org/wiki/Curve25519) +
 [Salsa20](http://en.wikipedia.org/wiki/Salsa20) +
 [Poly1305-AES](http://en.wikipedia.org/wiki/Poly1305-AES)). Secrets are
-collected in a JSON or TOML file, in which all the string values are encrypted. Public
+collected in a JSON, TOML, or YAML file, in which all the string values are encrypted. Public
 keys are embedded in the file, and the decrypter looks up the corresponding
 private key from its local filesystem.
 
@@ -226,6 +226,92 @@ The same encryption rules apply as with JSON:
 5. Underscores do NOT propagate to nested values (e.g., in `[_section]`, inner keys without underscore will still be encrypted).
 6. Arrays of strings are encrypted element by element.
 7. Inline tables follow the same key-based rules.
+
+## EYAML Format
+
+In addition to JSON and TOML, `ejson` also supports YAML files with the `.eyaml`, `.yaml`, or `.yml` extension. The format detection is automatic based on file extension.
+
+### Creating an `eyaml` file
+
+Create a file named `secrets.eyaml`:
+
+```yaml
+_public_key: "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
+
+# This won't be encrypted (underscore prefix)
+_database_username: "admin"
+
+# This will be encrypted
+database_password: "supersecret123"
+
+api:
+  # Nested values follow the same rules
+  secret_key: "api-secret-key"
+  _endpoint: "https://api.example.com"  # Won't be encrypted
+
+credentials:
+  # Nested mappings work too
+  username: "user"
+  password: "pass123"
+
+# Arrays of strings are encrypted element by element
+allowed_hosts:
+  - "host1.example.com"
+  - "host2.example.com"
+```
+
+### Encrypting an `eyaml` file
+
+```bash
+$ ejson encrypt secrets.eyaml
+Wrote 512 bytes to secrets.eyaml.
+```
+
+After encryption:
+
+```yaml
+_public_key: "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
+
+# This won't be encrypted (underscore prefix)
+_database_username: "admin"
+
+# This will be encrypted
+database_password: "EJ[1:WGj2t4znULHT1IRveMEdvvNXqZzNBNMsJ5iZVy6Dvxs=:kA6ekF8ViYR5ZLeSmMXWsdLfWr7wn9qS:fcHQtdt6nqcNOXa97/M278RX6w==]"
+
+api:
+  secret_key: "EJ[1:abc123...encrypted...]"
+  _endpoint: "https://api.example.com"  # Won't be encrypted
+
+credentials:
+  username: "EJ[1:...]"
+  password: "EJ[1:...]"
+
+allowed_hosts:
+  - "EJ[1:...]"
+  - "EJ[1:...]"
+```
+
+### Decrypting an `eyaml` file
+
+```bash
+$ ejson decrypt secrets.eyaml
+_public_key: "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
+_database_username: "admin"
+database_password: "supersecret123"
+...
+```
+
+### EYAML Format Rules
+
+The same encryption rules apply as with JSON and TOML:
+
+1. There *must* be a key at the top level named `_public_key`.
+2. All string values are encrypted by default.
+3. Numbers, booleans, floats, and nulls are NOT encrypted.
+4. Keys beginning with underscore (`_`) protect their immediate value from encryption.
+5. Underscores do NOT propagate to nested values (e.g., in `_section:`, inner keys without underscore will still be encrypted).
+6. Sequences (arrays) of strings are encrypted element by element.
+7. Nested mappings follow the same key-based rules.
 
 ## See also
 

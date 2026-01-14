@@ -1,6 +1,6 @@
 //! EJSON CLI - Manage encrypted secrets using public key encryption.
 //!
-//! Supports both JSON (.ejson, .json) and TOML (.etoml, .toml) file formats.
+//! Supports JSON (.ejson, .json), TOML (.etoml, .toml), and YAML (.eyaml, .yaml, .yml) file formats.
 
 use std::fs;
 use std::io::{self, Read, Write};
@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
 /// Manage encrypted secrets using public key encryption.
 #[derive(Parser)]
 #[command(name = "ejson")]
-#[command(version = "0.0.2")]
+#[command(version = "0.0.3")]
 #[command(author = "Trung Lê <8@tle.id.au>")]
 #[command(about = "Manage encrypted secrets using public key encryption")]
 struct Cli {
@@ -40,18 +40,18 @@ enum Commands {
         write: bool,
     },
 
-    /// (Re-)encrypt one or more EJSON/ETOML files
+    /// (Re-)encrypt one or more EJSON/ETOML/EYAML files
     #[command(alias = "e")]
     Encrypt {
-        /// Files to encrypt (format detected by extension: .ejson/.json or .etoml/.toml)
+        /// Files to encrypt (format detected by extension: .ejson/.json, .etoml/.toml, or .eyaml/.yaml/.yml)
         #[arg(required = true)]
         files: Vec<PathBuf>,
     },
 
-    /// Decrypt an EJSON/ETOML file
+    /// Decrypt an EJSON/ETOML/EYAML file
     #[command(alias = "d")]
     Decrypt {
-        /// File to decrypt (format detected by extension: .ejson/.json or .etoml/.toml)
+        /// File to decrypt (format detected by extension: .ejson/.json, .etoml/.toml, or .eyaml/.yaml/.yml)
         file: PathBuf,
 
         /// Print output to the provided file, rather than stdout
