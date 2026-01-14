@@ -1,0 +1,274 @@
+//! TOML processing for etoml files.
+//!
+//! This module provides functions to:
+//! - Extract the public key from an etoml document
+//! - Walk the TOML tree and selectively encrypt/decrypt string values
+//!
+//! The walker uses `toml_edit` to preserve formatting and comments.
+
+use thiserror::Error;
+use toml_edit::{DocumentMut, Item, Value};
+
+/// The key name at which the public key should be stored in an ETOML document.
+pub const PUBLIC_KEY_FIELD: &str = "_public_key";
+
+/// Errors that can occur during TOML processing.
+#[derive(Error, Debug)]
+pub enum TomlError {
+    #[error("public key not present in ETOML file")]
+    PublicKeyMissing,
+
+    #[error("public key has invalid format")]
+    PublicKeyInvalid,
+
+    #[error("invalid toml: {0}")]
+    InvalidToml(String),
+
+    #[error("action failed: {0}")]
+    ActionFailed(String),
+}
+
+/// Extract the _public_key value from an ETOML document.
+pub fn extract_public_key(data: &[u8]) -> Result<[u8; 32], TomlError> {
+    let s = String::from_utf8_lossy(data);
+    let doc: toml::Value = toml::from_str(&s).map_err(|e| TomlError::InvalidToml(e.to_string()))?;
+
+    let key_value = doc
+        .get(PUBLIC_KEY_FIELD)
+        .ok_or(TomlError::PublicKeyMissing)?;
+
+    let key_str = key_value.as_str().ok_or(TomlError::PublicKeyInvalid)?;
+
+    if key_str.len() != 64 {
+        return Err(TomlError::PublicKeyInvalid);
+    }
+
+    let key_bytes = hex::decode(key_str).map_err(|_| TomlError::PublicKeyInvalid)?;
+
+    if key_bytes.len() != 32 {
+        return Err(TomlError::PublicKeyInvalid);
+    }
+
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&key_bytes);
+    Ok(key)
+}
+
+/// Walker walks a TOML structure, applying an action to encryptable string values.
+///
+/// A value is encryptable if:
+/// - It's a string value (not a key)
+/// - Its referencing key does NOT begin with an underscore
+///
+/// Note: The underscore prefix does NOT propagate to nested values.
+pub struct Walker<F>
+where
+    F: Fn(&[u8]) -> Result<Vec<u8>, String>,
+{
+    action: F,
+}
+
+impl<F> Walker<F>
+where
+    F: Fn(&[u8]) -> Result<Vec<u8>, String>,
+{
+    pub fn new(action: F) -> Self {
+        Self { action }
+    }
+
+    /// Walk the TOML data and apply the action to encryptable values.
+    pub fn walk(&self, data: &[u8]) -> Result<Vec<u8>, TomlError> {
+        let s = String::from_utf8_lossy(data);
+        let mut doc: DocumentMut = s
+            .parse()
+            .map_err(|e: toml_edit::TomlError| TomlError::InvalidToml(e.to_string()))?;
+
+        // Process all items in the document
+        self.walk_table(doc.as_table_mut())?;
+
+        Ok(doc.to_string().into_bytes())
+    }
+
+    fn walk_table(&self, table: &mut toml_edit::Table) -> Result<(), TomlError> {
+        // Collect keys first to avoid borrow issues
+        let keys: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
+
+        for key in keys {
+            let is_comment = key.starts_with('_');
+
+            if let Some(item) = table.get_mut(&key) {
+                self.walk_item(item, is_comment)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn walk_item(&self, item: &mut Item, is_comment: bool) -> Result<(), TomlError> {
+        match item {
+            Item::Value(value) => self.walk_value(value, is_comment)?,
+            Item::Table(table) => {
+                // For tables, underscore doesn't propagate to nested values
+                self.walk_table(table)?;
+            }
+            Item::ArrayOfTables(array) => {
+                for table in array.iter_mut() {
+                    self.walk_table(table)?;
+                }
+            }
+            Item::None => {}
+        }
+        Ok(())
+    }
+
+    fn walk_value(&self, value: &mut Value, is_comment: bool) -> Result<(), TomlError> {
+        match value {
+            Value::String(s) => {
+                if !is_comment {
+                    let plaintext = s.value();
+                    let result =
+                        (self.action)(plaintext.as_bytes()).map_err(TomlError::ActionFailed)?;
+                    let result_str = String::from_utf8_lossy(&result).to_string();
+                    *s = toml_edit::Formatted::new(result_str);
+                }
+            }
+            Value::Array(arr) => {
+                for item in arr.iter_mut() {
+                    self.walk_value(item, is_comment)?;
+                }
+            }
+            Value::InlineTable(table) => {
+                // For inline tables, process each key-value pair
+                let keys: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
+                for key in keys {
+                    let inner_is_comment = key.starts_with('_');
+                    if let Some(inner_value) = table.get_mut(&key) {
+                        self.walk_value(inner_value, inner_is_comment)?;
+                    }
+                }
+            }
+            // Non-string values (integers, floats, booleans, datetimes) are not encrypted
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_public_key() {
+        let toml =
+            br#"_public_key = "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
+secret = "value"
+"#;
+        let key = extract_public_key(toml).unwrap();
+        assert_eq!(
+            hex::encode(key),
+            "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
+        );
+    }
+
+    #[test]
+    fn test_extract_public_key_missing() {
+        let toml = br#"secret = "value""#;
+        assert!(matches!(
+            extract_public_key(toml),
+            Err(TomlError::PublicKeyMissing)
+        ));
+    }
+
+    #[test]
+    fn test_walker_with_comment_key() {
+        let toml = br#"_comment = "not encrypted"
+secret = "encrypted"
+"#;
+        let walker = Walker::new(|data| {
+            Ok(format!("ENCRYPTED:{}", String::from_utf8_lossy(data)).into_bytes())
+        });
+
+        let result = walker.walk(toml).unwrap();
+        let result_str = String::from_utf8_lossy(&result);
+
+        assert!(result_str.contains(r#"_comment = "not encrypted""#));
+        assert!(result_str.contains(r#"secret = "ENCRYPTED:encrypted""#));
+    }
+
+    #[test]
+    fn test_walker_nested_table() {
+        let toml = br#"[outer]
+inner = "value"
+"#;
+        let walker =
+            Walker::new(|data| Ok(format!("E:{}", String::from_utf8_lossy(data)).into_bytes()));
+
+        let result = walker.walk(toml).unwrap();
+        let result_str = String::from_utf8_lossy(&result);
+
+        assert!(result_str.contains(r#"inner = "E:value""#));
+    }
+
+    #[test]
+    fn test_walker_underscore_does_not_propagate() {
+        // Underscore prefix should NOT propagate to nested values
+        let toml = br#"[_outer]
+inner = "should_encrypt"
+"#;
+        let walker =
+            Walker::new(|data| Ok(format!("E:{}", String::from_utf8_lossy(data)).into_bytes()));
+
+        let result = walker.walk(toml).unwrap();
+        let result_str = String::from_utf8_lossy(&result);
+
+        // The inner value SHOULD be encrypted (underscore doesn't propagate)
+        assert!(result_str.contains(r#"inner = "E:should_encrypt""#));
+    }
+
+    #[test]
+    fn test_walker_array() {
+        let toml = br#"secrets = ["secret1", "secret2"]
+"#;
+        let walker =
+            Walker::new(|data| Ok(format!("E:{}", String::from_utf8_lossy(data)).into_bytes()));
+
+        let result = walker.walk(toml).unwrap();
+        let result_str = String::from_utf8_lossy(&result);
+
+        assert!(result_str.contains(r#""E:secret1""#));
+        assert!(result_str.contains(r#""E:secret2""#));
+    }
+
+    #[test]
+    fn test_walker_inline_table() {
+        let toml = br#"credentials = { username = "admin", password = "secret123" }
+"#;
+        let walker =
+            Walker::new(|data| Ok(format!("E:{}", String::from_utf8_lossy(data)).into_bytes()));
+
+        let result = walker.walk(toml).unwrap();
+        let result_str = String::from_utf8_lossy(&result);
+
+        assert!(result_str.contains(r#""E:admin""#));
+        assert!(result_str.contains(r#""E:secret123""#));
+    }
+
+    #[test]
+    fn test_walker_non_string_values() {
+        let toml = br#"port = 8080
+enabled = true
+ratio = 1.5
+"#;
+        let walker =
+            Walker::new(|data| Ok(format!("E:{}", String::from_utf8_lossy(data)).into_bytes()));
+
+        let result = walker.walk(toml).unwrap();
+        let result_str = String::from_utf8_lossy(&result);
+
+        // Non-string values should NOT be encrypted
+        assert!(result_str.contains("port = 8080"));
+        assert!(result_str.contains("enabled = true"));
+        assert!(result_str.contains("ratio = 1.5"));
+    }
+}

@@ -11,7 +11,7 @@ curve](http://en.wikipedia.org/wiki/Elliptic_curve_cryptography) cryptography
 [Curve25519](http://en.wikipedia.org/wiki/Curve25519) +
 [Salsa20](http://en.wikipedia.org/wiki/Salsa20) +
 [Poly1305-AES](http://en.wikipedia.org/wiki/Poly1305-AES)). Secrets are
-collected in a JSON file, in which all the string values are encrypted. Public
+collected in a JSON or TOML file, in which all the string values are encrypted. Public
 keys are embedded in the file, and the decrypter looks up the corresponding
 private key from its local filesystem.
 
@@ -149,6 +149,83 @@ of:
    encrypted, and is useful for implementing metadata schemes.
 6. Underscores do not propagate downward. For example, in `{"_a": {"b": "c"}}`,
    `"c"` will be encrypted.
+
+## ETOML Format
+
+In addition to JSON, `ejson` also supports TOML files with the `.etoml` or `.toml` extension. The format detection is automatic based on file extension.
+
+### Creating an `etoml` file
+
+Create a file named `secrets.etoml`:
+
+```toml
+_public_key = "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
+
+# This won't be encrypted (underscore prefix)
+_database_username = "admin"
+
+# This will be encrypted
+database_password = "supersecret123"
+
+[api]
+# Nested values follow the same rules
+secret_key = "api-secret-key"
+_endpoint = "https://api.example.com"  # Won't be encrypted
+
+[credentials]
+# Inline tables work too
+service = { username = "user", password = "pass123" }
+```
+
+### Encrypting an `etoml` file
+
+```bash
+$ ejson encrypt secrets.etoml
+Wrote 512 bytes to secrets.etoml.
+```
+
+After encryption:
+
+```toml
+_public_key = "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
+
+# This won't be encrypted (underscore prefix)
+_database_username = "admin"
+
+# This will be encrypted
+database_password = "EJ[1:WGj2t4znULHT1IRveMEdvvNXqZzNBNMsJ5iZVy6Dvxs=:kA6ekF8ViYR5ZLeSmMXWsdLfWr7wn9qS:fcHQtdt6nqcNOXa97/M278RX6w==]"
+
+[api]
+# Nested values follow the same rules
+secret_key = "EJ[1:abc123...encrypted...]"
+_endpoint = "https://api.example.com"  # Won't be encrypted
+
+[credentials]
+# Inline tables work too
+service = { username = "EJ[1:...]", password = "EJ[1:...]" }
+```
+
+### Decrypting an `etoml` file
+
+```bash
+$ ejson decrypt secrets.etoml
+_public_key = "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
+_database_username = "admin"
+database_password = "supersecret123"
+...
+```
+
+### ETOML Format Rules
+
+The same encryption rules apply as with JSON:
+
+1. There *must* be a key at the top level named `_public_key`.
+2. All string values are encrypted by default.
+3. Numbers, booleans, floats, and datetimes are NOT encrypted.
+4. Keys beginning with underscore (`_`) protect their immediate value from encryption.
+5. Underscores do NOT propagate to nested values (e.g., in `[_section]`, inner keys without underscore will still be encrypted).
+6. Arrays of strings are encrypted element by element.
+7. Inline tables follow the same key-based rules.
 
 ## See also
 

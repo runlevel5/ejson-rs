@@ -1,4 +1,6 @@
 //! EJSON CLI - Manage encrypted secrets using public key encryption.
+//!
+//! Supports both JSON (.ejson, .json) and TOML (.etoml, .toml) file formats.
 
 use std::fs;
 use std::io::{self, Read, Write};
@@ -10,7 +12,7 @@ use clap::{Parser, Subcommand};
 /// Manage encrypted secrets using public key encryption.
 #[derive(Parser)]
 #[command(name = "ejson")]
-#[command(version = "0.0.1")]
+#[command(version = "0.0.2")]
 #[command(author = "Trung Lê <8@tle.id.au>")]
 #[command(about = "Manage encrypted secrets using public key encryption")]
 struct Cli {
@@ -38,18 +40,18 @@ enum Commands {
         write: bool,
     },
 
-    /// (Re-)encrypt one or more EJSON files
+    /// (Re-)encrypt one or more EJSON/ETOML files
     #[command(alias = "e")]
     Encrypt {
-        /// Files to encrypt
+        /// Files to encrypt (format detected by extension: .ejson/.json or .etoml/.toml)
         #[arg(required = true)]
         files: Vec<PathBuf>,
     },
 
-    /// Decrypt an EJSON file
+    /// Decrypt an EJSON/ETOML file
     #[command(alias = "d")]
     Decrypt {
-        /// File to decrypt
+        /// File to decrypt (format detected by extension: .ejson/.json or .etoml/.toml)
         file: PathBuf,
 
         /// Print output to the provided file, rather than stdout
