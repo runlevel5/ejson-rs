@@ -66,12 +66,8 @@ pub fn encrypt<R: Read, W: Write>(mut input: R, mut output: W) -> Result<usize, 
     let encrypter = my_kp.encrypter(pubkey);
 
     // Walk and encrypt
-    let walker = Walker::new(|plaintext: &[u8]| {
-        encrypter
-            .encrypt(plaintext)
-            .map_err(|e| e.to_string())
-            .map(|encrypted| encrypted)
-    });
+    let walker =
+        Walker::new(|plaintext: &[u8]| encrypter.encrypt(plaintext).map_err(|e| e.to_string()));
 
     let new_data = walker.walk(&data)?;
     output.write_all(&new_data)?;

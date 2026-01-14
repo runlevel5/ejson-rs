@@ -46,7 +46,7 @@ impl Keypair {
 
         Ok(Self {
             public: public_key.as_bytes().to_owned(),
-            private: secret_key.to_bytes().into(),
+            private: secret_key.to_bytes(),
         })
     }
 
