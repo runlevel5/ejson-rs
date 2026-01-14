@@ -74,25 +74,31 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            archive: tar.gz
+            archive: tar.xz
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            archive: tar.gz
+            archive: tar.xz
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            archive: tar.gz
+            archive: tar.xz
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.xz
           - target: x86_64-apple-darwin
             os: macos-latest
-            archive: tar.gz
+            archive: tar.xz
           - target: aarch64-apple-darwin
             os: macos-latest
-            archive: tar.gz
+            archive: tar.xz
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             archive: zip
           - target: powerpc64le-unknown-linux-gnu
             os: ubuntu-latest
-            archive: tar.gz
+            archive: tar.xz
+          - target: powerpc64le-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.xz
 
     steps:
       - uses: actions/checkout@v5
@@ -118,6 +124,22 @@ jobs:
           echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
           echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
 
+      - name: Install cross-compilation tools (Linux ARM musl)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: |
+          curl -sSLO https://musl.cc/aarch64-linux-musl-cross.tgz
+          curl -sSLO https://musl.cc/SHA512SUMS
+          sha512sum -c --ignore-missing SHA512SUMS
+          tar xzf aarch64-linux-musl-cross.tgz
+          rm -f aarch64-linux-musl-cross.tgz SHA512SUMS
+          echo "$PWD/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
+
+      - name: Configure cross-compilation (Linux ARM musl)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: |
+          echo '[target.aarch64-unknown-linux-musl]' >> ~/.cargo/config.toml
+          echo 'linker = "aarch64-linux-musl-gcc"' >> ~/.cargo/config.toml
+
       - name: Install cross-compilation tools (Linux ppc64le)
         if: matrix.target == 'powerpc64le-unknown-linux-gnu'
         run: |
@@ -129,6 +151,22 @@ jobs:
         run: |
           echo '[target.powerpc64le-unknown-linux-gnu]' >> ~/.cargo/config.toml
           echo 'linker = "powerpc64le-linux-gnu-gcc"' >> ~/.cargo/config.toml
+
+      - name: Install cross-compilation tools (Linux ppc64le musl)
+        if: matrix.target == 'powerpc64le-unknown-linux-musl'
+        run: |
+          curl -sSLO https://musl.cc/powerpc64le-linux-musl-cross.tgz
+          curl -sSLO https://musl.cc/SHA512SUMS
+          sha512sum -c --ignore-missing SHA512SUMS
+          tar xzf powerpc64le-linux-musl-cross.tgz
+          rm -f powerpc64le-linux-musl-cross.tgz SHA512SUMS
+          echo "$PWD/powerpc64le-linux-musl-cross/bin" >> $GITHUB_PATH
+
+      - name: Configure cross-compilation (Linux ppc64le musl)
+        if: matrix.target == 'powerpc64le-unknown-linux-musl'
+        run: |
+          echo '[target.powerpc64le-unknown-linux-musl]' >> ~/.cargo/config.toml
+          echo 'linker = "powerpc64le-linux-musl-gcc"' >> ~/.cargo/config.toml
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -148,7 +186,7 @@ jobs:
         if: matrix.os != 'windows-latest'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czvf ../../../ejson-${{ needs.check-version.outputs.version }}-${{ matrix.target }}.tar.gz ejson
+          tar cJvf ../../../ejson-${{ needs.check-version.outputs.version }}-${{ matrix.target }}.tar.xz ejson
           cd ../../..
 
       - name: Prepare archive (Windows)
