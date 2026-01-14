@@ -12,6 +12,8 @@ pub enum FileFormat {
     Json,
     /// TOML format (.etoml, .toml)
     Toml,
+    /// YAML format (.eyaml, .yaml, .yml)
+    Yaml,
 }
 
 impl FileFormat {
@@ -25,6 +27,7 @@ impl FileFormat {
             match ext.to_str() {
                 Some("etoml") | Some("toml") => FileFormat::Toml,
                 Some("ejson") | Some("json") => FileFormat::Json,
+                Some("eyaml") | Some("yaml") | Some("yml") => FileFormat::Yaml,
                 _ => FileFormat::Json, // Default to JSON
             }
         } else {
@@ -58,6 +61,21 @@ mod tests {
     }
 
     #[test]
+    fn test_format_detection_eyaml() {
+        assert_eq!(FileFormat::from_path("secrets.eyaml"), FileFormat::Yaml);
+    }
+
+    #[test]
+    fn test_format_detection_yaml() {
+        assert_eq!(FileFormat::from_path("config.yaml"), FileFormat::Yaml);
+    }
+
+    #[test]
+    fn test_format_detection_yml() {
+        assert_eq!(FileFormat::from_path("config.yml"), FileFormat::Yaml);
+    }
+
+    #[test]
     fn test_format_detection_unknown() {
         assert_eq!(FileFormat::from_path("file.txt"), FileFormat::Json);
     }
@@ -76,6 +94,10 @@ mod tests {
         assert_eq!(
             FileFormat::from_path("/path/to/secrets.ejson"),
             FileFormat::Json
+        );
+        assert_eq!(
+            FileFormat::from_path("/path/to/secrets.eyaml"),
+            FileFormat::Yaml
         );
     }
 }
