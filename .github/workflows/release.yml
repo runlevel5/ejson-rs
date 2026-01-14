@@ -93,6 +93,9 @@ jobs:
           - target: powerpc64le-unknown-linux-gnu
             os: ubuntu-latest
             archive: tar.gz
+          - target: powerpc64le-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
 
     steps:
       - uses: actions/checkout@v5
@@ -129,6 +132,21 @@ jobs:
         run: |
           echo '[target.powerpc64le-unknown-linux-gnu]' >> ~/.cargo/config.toml
           echo 'linker = "powerpc64le-linux-gnu-gcc"' >> ~/.cargo/config.toml
+
+      - name: Install cross-compilation tools (Linux ppc64le musl)
+        if: matrix.target == 'powerpc64le-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget
+          wget -q https://musl.cc/powerpc64le-linux-musl-cross.tgz
+          tar xzf powerpc64le-linux-musl-cross.tgz
+          echo "$PWD/powerpc64le-linux-musl-cross/bin" >> $GITHUB_PATH
+
+      - name: Configure cross-compilation (Linux ppc64le musl)
+        if: matrix.target == 'powerpc64le-unknown-linux-musl'
+        run: |
+          echo '[target.powerpc64le-unknown-linux-musl]' >> ~/.cargo/config.toml
+          echo 'linker = "powerpc64le-linux-musl-gcc"' >> ~/.cargo/config.toml
 
       - name: Cache cargo registry
         uses: actions/cache@v4
