@@ -1,327 +1,157 @@
 # ejson-rs
 
-It's just the Rust port of [Shopify/ejson](https://github.com/Shopify/ejson).
-It could be used as drop-in replacement since it shares exact public interface.
+A Rust implementation of [Shopify/ejson](https://github.com/Shopify/ejson) — a utility for managing secrets in source control using public-key cryptography.
 
-It support more file formats such as YAML and TOML.
-
-`ejson` is a utility for managing a collection of secrets in source control. The
-secrets are encrypted using [public
-key](http://en.wikipedia.org/wiki/Public-key_cryptography), [elliptic
-curve](http://en.wikipedia.org/wiki/Elliptic_curve_cryptography) cryptography
-([NaCl](http://nacl.cr.yp.to/) [Box](http://nacl.cr.yp.to/box.html):
-[Curve25519](http://en.wikipedia.org/wiki/Curve25519) +
-[Salsa20](http://en.wikipedia.org/wiki/Salsa20) +
-[Poly1305-AES](http://en.wikipedia.org/wiki/Poly1305-AES)). Secrets are
-collected in a JSON, TOML, or YAML file, in which all the string values are encrypted. Public
-keys are embedded in the file, and the decrypter looks up the corresponding
-private key from its local filesystem.
+This is a drop-in replacement for the original Go implementation, with added support for **YAML** and **TOML** file formats.
 
 ![demo](http://burkelibbey.s3.amazonaws.com/ejson-demo.gif)
 
-The main benefits provided by `ejson` are:
+## Why ejson?
 
-* Secrets can be safely stored in a git repo.
-* Changes to secrets are auditable on a line-by-line basis with `git blame`.
-* Anyone with git commit access has access to write new secrets.
-* Decryption access can easily be locked down to production servers only.
-* Secrets change synchronously with application source (as opposed to secrets
-  provisioned by Configuration Management).
-* Simple, well-tested, easily-auditable source.
+- **Safe version control** — Secrets can be safely stored in git
+- **Auditable changes** — Track secret changes line-by-line with `git blame`
+- **Easy access control** — Anyone with commit access can write secrets; decryption can be restricted to production servers
+- **Synchronized deployments** — Secrets change with application source, not separately via config management
+- **Battle-tested** — Simple, well-tested, easily-auditable source
 
-See [the manpages](https://shopify.github.io/ejson) for more technical documentation.
+## How It Works
+
+Secrets are encrypted using public-key, elliptic curve cryptography ([NaCl](http://nacl.cr.yp.to/) [Box](http://nacl.cr.yp.to/box.html): [Curve25519](http://en.wikipedia.org/wiki/Curve25519) + [Salsa20](http://en.wikipedia.org/wiki/Salsa20) + [Poly1305-AES](http://en.wikipedia.org/wiki/Poly1305-AES)). Public keys are embedded in the secrets file, while private keys are stored separately on the filesystem.
 
 ## Installation
 
-Feel free to download compiled binary from [Releases](https://github.com/runlevel5/ejson-rs/releases)
+### Pre-built Binaries
 
-Alternatively, the application could be compiled from scratch:
+Download compiled binaries from [Releases](https://github.com/runlevel5/ejson-rs/releases).
 
-```
-git clone https://github.com/runlevel5/ejson-rs.git
-# install asdf and asdf-rust plugin
-asdf install
-cargo build --release
-cp ./target/release/ejson ~/.local/bin/ejson
-export PATH=$HOME/.local/bin:$PATH
-ejson -V
-```
-
-As of January 2026, there is no packages for Homebrew, Deb and RPM packages. Feel free
-to package them in your favourite OS and let me know.
-
-## Workflow
-
-### 1: Create the Keydir
-
-By default, EJSON looks for keys in `/opt/ejson/keys`. You can change this by
-setting `EJSON_KEYDIR` or passing the `-keydir` option.
-
-```
-$ mkdir -p /opt/ejson/keys
-```
-
-> *For Mac OS users.* By default you won't have write permissions to `/opt/ejson` folder. Make sure to run the following command to grant these permissions:
+### Build from Source
 
 ```bash
-sudo chown -R $(whoami) /opt/ejson
+git clone https://github.com/runlevel5/ejson-rs.git
+cd ejson-rs
+cargo build --release
+cp ./target/release/ejson ~/.local/bin/
 ```
 
-### 2: Generate a keypair
+> **Note:** As of January 2026, there are no Homebrew, Deb, or RPM packages. Contributions welcome!
 
-When called with `-w`, `ejson keygen` will write the keypair into the `keydir`
-and print the public key. Without `-w`, it will print both keys to stdout. This
-is useful if you have to distribute the key to multiple servers via
-configuration management, etc.
+## Quick Start
 
+### 1. Create the Key Directory
+
+```bash
+mkdir -p /opt/ejson/keys
 ```
+
+> **macOS users:** You may need to grant write permissions:
+> ```bash
+> sudo chown -R $(whoami) /opt/ejson
+> ```
+
+You can customize the key location with `EJSON_KEYDIR` or the `--keydir` option.
+
+### 2. Generate a Keypair
+
+```bash
+# Print keys to stdout
 $ ejson keygen
 Public Key:
 63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f
 Private Key:
 75b80b4a693156eb435f4ed2fe397e583f461f09fd99ec2bd1bdef0a56cf6e64
-```
 
-```
+# Write keys to keydir (recommended)
 $ ejson keygen -w
 53393332c6c7c474af603c078f5696c8fe16677a09a711bba299a6c1c1676a59
-$ cat /opt/ejson/keys/5339*
-888a4291bef9135729357b8c70e5a62b0bbe104a679d829cdbe56d46a4481aaf
 ```
 
-### 3: Create an `ejson` file
+### 3. Create a Secrets File
 
-The format is described in more detail [later on](#format). For now, create a
-file that looks something like this. Fill in the `<key>` with whatever you got
-back in step 2.
-
-Create this file as `test.ejson`:
+Create `secrets.ejson` (or `.etoml` / `.eyaml`):
 
 ```json
 {
-  "_public_key": "<key>",
-  "_database_username": "1234username",
-  "database_password": "1234password"
+  "_public_key": "<your-public-key>",
+  "_database_username": "admin",
+  "database_password": "supersecret123"
 }
 ```
 
-### 4: Encrypt the file
+### 4. Encrypt
 
-Running `ejson encrypt test.ejson` will encrypt any new plaintext keys in the
-file and leave any existing encrypted keys or keys with property names prefixed with `_` untouched:
+```bash
+$ ejson encrypt secrets.ejson
+```
 
+Result:
 ```json
 {
   "_public_key": "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f",
-  "_database_username": "1234username",
+  "_database_username": "admin",
   "database_password": "EJ[1:WGj2t4znULHT1IRveMEdvvNXqZzNBNMsJ5iZVy6Dvxs=:kA6ekF8ViYR5ZLeSmMXWsdLfWr7wn9qS:fcHQtdt6nqcNOXa97/M278RX6w==]"
 }
 ```
 
-Try adding another plaintext secret to the file and run `ejson encrypt
-test.ejson` again. The `database_password` field will not be changed, but the
-new secret will be encrypted.
+### 5. Decrypt
 
-### 5: Decrypt the file
-
-To decrypt the file, you must have a file present in the `keydir` whose name is
-the 64-byte hex-encoded public key exactly as embedded in the `ejson` document.
-The contents of that file must be the similarly-encoded private key. If you used
-`ejson keygen -w`, you've already got this covered.
-
-Unlike `ejson encrypt`, which overwrites the specified files, `ejson decrypt`
-only takes one file parameter, and prints the output to `stdout`:
-
-```
-$ ejson decrypt foo.ejson
-{
-  "_public_key": "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f",
-  "_database_username": "1234username",
-  "database_password": "1234password"
-}
+```bash
+$ ejson decrypt secrets.ejson
 ```
 
-## Format
+The private key must be in the keydir, named after the public key. If you used `ejson keygen -w`, this is already set up.
 
-The `ejson` document format is simple, but there are a few points to be aware
-of:
+## Supported Formats
 
-1. It's just JSON.
-2. There *must* be a key at the top level named `_public_key`, whose value is a
-   32-byte hex-encoded (i.e. 64 ASCII byte) public key as generated by `ejson
-   keygen`.
-3. Any string literal that isn't an object key will be encrypted by default (ie.
-   in `{"a": "b"}`, `"b"` will be encrypted, but `"a"` will not.
-4. Numbers, booleans, and nulls aren't encrypted.
-5. If a key begins with an underscore, its corresponding value will not be
-   encrypted. This is used to prevent the `_public_key` field from being
-   encrypted, and is useful for implementing metadata schemes.
-6. Underscores do not propagate downward. For example, in `{"_a": {"b": "c"}}`,
-   `"c"` will be encrypted.
+Format detection is automatic based on file extension:
 
-## ETOML Format
+| Format | Extensions |
+|--------|------------|
+| JSON   | `.ejson`, `.json` |
+| TOML   | `.etoml`, `.toml` |
+| YAML   | `.eyaml`, `.yaml`, `.yml` |
 
-In addition to JSON, `ejson` also supports TOML files with the `.etoml` or `.toml` extension. The format detection is automatic based on file extension.
+### Encryption Rules
 
-### Creating an `etoml` file
+These rules apply to all formats:
 
-Create a file named `secrets.etoml`:
+1. **Public key required** — Must have a top-level `_public_key` field
+2. **Strings are encrypted** — All string values are encrypted by default
+3. **Other types are not encrypted** — Numbers, booleans, nulls, dates remain plaintext
+4. **Underscore prefix skips encryption** — Keys starting with `_` protect their immediate value
+5. **Underscores don't propagate** — Nested values under `_key` are still encrypted unless they also have underscore prefixes
+6. **Arrays work element-by-element** — String arrays have each element encrypted individually
+
+### Example: TOML
 
 ```toml
 _public_key = "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
 
-# This won't be encrypted (underscore prefix)
-_database_username = "admin"
-
-# This will be encrypted
-database_password = "supersecret123"
+_database_username = "admin"           # Not encrypted (underscore prefix)
+database_password = "supersecret123"   # Encrypted
 
 [api]
-# Nested values follow the same rules
-secret_key = "api-secret-key"
-_endpoint = "https://api.example.com"  # Won't be encrypted
-
-[credentials]
-# Inline tables work too
-service = { username = "user", password = "pass123" }
+secret_key = "api-secret-key"          # Encrypted
+_endpoint = "https://api.example.com"  # Not encrypted
 ```
 
-### Encrypting an `etoml` file
-
-```bash
-$ ejson encrypt secrets.etoml
-Wrote 512 bytes to secrets.etoml.
-```
-
-After encryption:
-
-```toml
-_public_key = "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
-
-# This won't be encrypted (underscore prefix)
-_database_username = "admin"
-
-# This will be encrypted
-database_password = "EJ[1:WGj2t4znULHT1IRveMEdvvNXqZzNBNMsJ5iZVy6Dvxs=:kA6ekF8ViYR5ZLeSmMXWsdLfWr7wn9qS:fcHQtdt6nqcNOXa97/M278RX6w==]"
-
-[api]
-# Nested values follow the same rules
-secret_key = "EJ[1:abc123...encrypted...]"
-_endpoint = "https://api.example.com"  # Won't be encrypted
-
-[credentials]
-# Inline tables work too
-service = { username = "EJ[1:...]", password = "EJ[1:...]" }
-```
-
-### Decrypting an `etoml` file
-
-```bash
-$ ejson decrypt secrets.etoml
-_public_key = "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
-_database_username = "admin"
-database_password = "supersecret123"
-...
-```
-
-### ETOML Format Rules
-
-The same encryption rules apply as with JSON:
-
-1. There *must* be a key at the top level named `_public_key`.
-2. All string values are encrypted by default.
-3. Numbers, booleans, floats, and datetimes are NOT encrypted.
-4. Keys beginning with underscore (`_`) protect their immediate value from encryption.
-5. Underscores do NOT propagate to nested values (e.g., in `[_section]`, inner keys without underscore will still be encrypted).
-6. Arrays of strings are encrypted element by element.
-7. Inline tables follow the same key-based rules.
-
-## EYAML Format
-
-In addition to JSON and TOML, `ejson` also supports YAML files with the `.eyaml`, `.yaml`, or `.yml` extension. The format detection is automatic based on file extension.
-
-### Creating an `eyaml` file
-
-Create a file named `secrets.eyaml`:
+### Example: YAML
 
 ```yaml
 _public_key: "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
 
-# This won't be encrypted (underscore prefix)
-_database_username: "admin"
-
-# This will be encrypted
-database_password: "supersecret123"
+_database_username: "admin"            # Not encrypted
+database_password: "supersecret123"    # Encrypted
 
 api:
-  # Nested values follow the same rules
-  secret_key: "api-secret-key"
-  _endpoint: "https://api.example.com"  # Won't be encrypted
+  secret_key: "api-secret-key"         # Encrypted
+  _endpoint: "https://api.example.com" # Not encrypted
 
-credentials:
-  # Nested mappings work too
-  username: "user"
-  password: "pass123"
-
-# Arrays of strings are encrypted element by element
-allowed_hosts:
+allowed_hosts:                         # Each element encrypted
   - "host1.example.com"
   - "host2.example.com"
 ```
 
-### Encrypting an `eyaml` file
+## See Also
 
-```bash
-$ ejson encrypt secrets.eyaml
-Wrote 512 bytes to secrets.eyaml.
-```
-
-After encryption:
-
-```yaml
-_public_key: "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
-
-# This won't be encrypted (underscore prefix)
-_database_username: "admin"
-
-# This will be encrypted
-database_password: "EJ[1:WGj2t4znULHT1IRveMEdvvNXqZzNBNMsJ5iZVy6Dvxs=:kA6ekF8ViYR5ZLeSmMXWsdLfWr7wn9qS:fcHQtdt6nqcNOXa97/M278RX6w==]"
-
-api:
-  secret_key: "EJ[1:abc123...encrypted...]"
-  _endpoint: "https://api.example.com"  # Won't be encrypted
-
-credentials:
-  username: "EJ[1:...]"
-  password: "EJ[1:...]"
-
-allowed_hosts:
-  - "EJ[1:...]"
-  - "EJ[1:...]"
-```
-
-### Decrypting an `eyaml` file
-
-```bash
-$ ejson decrypt secrets.eyaml
-_public_key: "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
-_database_username: "admin"
-database_password: "supersecret123"
-...
-```
-
-### EYAML Format Rules
-
-The same encryption rules apply as with JSON and TOML:
-
-1. There *must* be a key at the top level named `_public_key`.
-2. All string values are encrypted by default.
-3. Numbers, booleans, floats, and nulls are NOT encrypted.
-4. Keys beginning with underscore (`_`) protect their immediate value from encryption.
-5. Underscores do NOT propagate to nested values (e.g., in `_section:`, inner keys without underscore will still be encrypted).
-6. Sequences (arrays) of strings are encrypted element by element.
-7. Nested mappings follow the same key-based rules.
-
-## See also
-
-* If you use [pre-commit](https://pre-commit.com/), you can use it to automatically encrypt secrets on commit.
+- [Original ejson documentation](https://shopify.github.io/ejson)
+- Use with [pre-commit](https://pre-commit.com/) to automatically encrypt secrets on commit
