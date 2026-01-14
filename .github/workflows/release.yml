@@ -81,6 +81,9 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             archive: tar.xz
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.xz
           - target: x86_64-apple-darwin
             os: macos-latest
             archive: tar.xz
@@ -120,6 +123,21 @@ jobs:
         run: |
           echo '[target.aarch64-unknown-linux-gnu]' >> ~/.cargo/config.toml
           echo 'linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+
+      - name: Install cross-compilation tools (Linux ARM musl)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wget
+          wget -q https://musl.cc/aarch64-linux-musl-cross.tgz
+          tar xzf aarch64-linux-musl-cross.tgz
+          echo "$PWD/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
+
+      - name: Configure cross-compilation (Linux ARM musl)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: |
+          echo '[target.aarch64-unknown-linux-musl]' >> ~/.cargo/config.toml
+          echo 'linker = "aarch64-linux-musl-gcc"' >> ~/.cargo/config.toml
 
       - name: Install cross-compilation tools (Linux ppc64le)
         if: matrix.target == 'powerpc64le-unknown-linux-gnu'
