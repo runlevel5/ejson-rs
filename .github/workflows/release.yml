@@ -133,6 +133,7 @@ jobs:
           wget -q https://musl.cc/SHA512SUMS
           sha512sum -c --ignore-missing SHA512SUMS
           tar xzf aarch64-linux-musl-cross.tgz
+          rm -f aarch64-linux-musl-cross.tgz SHA512SUMS
           echo "$PWD/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
 
       - name: Configure cross-compilation (Linux ARM musl)
@@ -162,6 +163,7 @@ jobs:
           wget -q https://musl.cc/SHA512SUMS
           sha512sum -c --ignore-missing SHA512SUMS
           tar xzf powerpc64le-linux-musl-cross.tgz
+          rm -f powerpc64le-linux-musl-cross.tgz SHA512SUMS
           echo "$PWD/powerpc64le-linux-musl-cross/bin" >> $GITHUB_PATH
 
       - name: Configure cross-compilation (Linux ppc64le musl)
