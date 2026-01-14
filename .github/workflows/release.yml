@@ -130,6 +130,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y wget
           wget -q https://musl.cc/aarch64-linux-musl-cross.tgz
+          wget -q https://musl.cc/SHA512SUMS
+          sha512sum -c --ignore-missing SHA512SUMS
           tar xzf aarch64-linux-musl-cross.tgz
           echo "$PWD/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
 
@@ -157,6 +159,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y wget
           wget -q https://musl.cc/powerpc64le-linux-musl-cross.tgz
+          wget -q https://musl.cc/SHA512SUMS
+          sha512sum -c --ignore-missing SHA512SUMS
           tar xzf powerpc64le-linux-musl-cross.tgz
           echo "$PWD/powerpc64le-linux-musl-cross/bin" >> $GITHUB_PATH
 
