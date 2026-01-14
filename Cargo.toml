@@ -1,0 +1,43 @@
+[package]
+name = "ejson"
+version = "0.0.1"
+edition = "2021"
+authors = ["Trung Lê <8@tle.id.au>"]
+description = "Manage encrypted secrets using public key encryption"
+license = "MIT"
+repository = "https://github.com/runlevel5/ejson-rs"
+keywords = ["encryption", "secrets", "json", "nacl"]
+categories = ["cryptography", "command-line-utilities"]
+
+[dependencies]
+# Cryptography
+crypto_box = "0.9"
+rand = "0.8"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# JSON
+serde_json = "1"
+
+# Encoding
+base64 = "0.22"
+hex = "0.4"
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Regex for message parsing
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "ejson"
+path = "src/main.rs"
+
+[lib]
+name = "ejson"
+path = "src/lib.rs"
