@@ -3,6 +3,8 @@
 It's just the Rust port of [Shopify/ejson](https://github.com/Shopify/ejson).
 It could be used as drop-in replacement since it shares exact public interface.
 
+It support more file formats such as YAML and TOML.
+
 `ejson` is a utility for managing a collection of secrets in source control. The
 secrets are encrypted using [public
 key](http://en.wikipedia.org/wiki/Public-key_cryptography), [elliptic
@@ -31,6 +33,10 @@ See [the manpages](https://shopify.github.io/ejson) for more technical documenta
 
 ## Installation
 
+Feel free to download compiled binary from [Releases](https://github.com/runlevel5/ejson-rs/releases)
+
+Alternatively, the application could be compiled from scratch:
+
 ```
 git clone https://github.com/runlevel5/ejson-rs.git
 # install asdf and asdf-rust plugin
@@ -40,6 +46,9 @@ cp ./target/release/ejson ~/.local/bin/ejson
 export PATH=$HOME/.local/bin:$PATH
 ejson -V
 ```
+
+As of January 2026, there is no packages for Homebrew, Deb and RPM packages. Feel free
+to package them in your favourite OS and let me know.
 
 ## Workflow
 
