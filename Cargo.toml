@@ -6,7 +6,7 @@ authors = ["Trung Lê <8@tle.id.au>"]
 description = "Manage encrypted secrets using public key encryption"
 license = "MIT"
 repository = "https://github.com/runlevel5/ejson-rs"
-keywords = ["encryption", "secrets", "json", "toml", "yaml", "nacl"]
+keywords = ["encryption", "secrets", "json", "toml", "yaml"]
 categories = ["cryptography", "command-line-utilities"]
 
 [dependencies]
