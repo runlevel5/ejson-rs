@@ -127,8 +127,8 @@ jobs:
       - name: Install cross-compilation tools (Linux ARM musl)
         if: matrix.target == 'aarch64-unknown-linux-musl'
         run: |
-          curl -sSLO https://musl.cc/aarch64-linux-musl-cross.tgz
-          curl -sSLO https://musl.cc/SHA512SUMS
+          curl -sSLO https://more.musl.cc/x86_64-linux-musl/aarch64-linux-musl-cross.tgz
+          curl -sSLO https://more.musl.cc/x86_64-linux-musl/SHA512SUMS
           sha512sum -c --ignore-missing SHA512SUMS
           tar xzf aarch64-linux-musl-cross.tgz
           rm -f aarch64-linux-musl-cross.tgz SHA512SUMS
@@ -155,8 +155,8 @@ jobs:
       - name: Install cross-compilation tools (Linux ppc64le musl)
         if: matrix.target == 'powerpc64le-unknown-linux-musl'
         run: |
-          curl -sSLO https://musl.cc/powerpc64le-linux-musl-cross.tgz
-          curl -sSLO https://musl.cc/SHA512SUMS
+          curl -sSLO https://more.musl.cc/x86_64-linux-musl/powerpc64le-linux-musl-cross.tgz
+          curl -sSLO https://more.musl.cc/x86_64-linux-musl/SHA512SUMS
           sha512sum -c --ignore-missing SHA512SUMS
           tar xzf powerpc64le-linux-musl-cross.tgz
           rm -f powerpc64le-linux-musl-cross.tgz SHA512SUMS
