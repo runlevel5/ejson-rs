@@ -99,6 +99,20 @@ jobs:
           - target: powerpc64le-unknown-linux-musl
             os: ubuntu-latest
             archive: tar.xz
+          - target: x86_64-unknown-freebsd
+            os: ubuntu-latest
+            archive: tar.xz
+            use_cross: true
+          - target: aarch64-unknown-freebsd
+            os: ubuntu-latest
+            archive: tar.xz
+            use_cross: true
+          - target: riscv64gc-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.xz
+          - target: s390x-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.xz
 
     steps:
       - uses: actions/checkout@v5
@@ -174,6 +188,34 @@ jobs:
           echo '[target.powerpc64le-unknown-linux-musl]' >> ~/.cargo/config.toml
           echo 'linker = "powerpc64le-buildroot-linux-musl-gcc"' >> ~/.cargo/config.toml
 
+      - name: Install cross-compilation tools (Linux riscv64)
+        if: matrix.target == 'riscv64gc-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-riscv64-linux-gnu
+
+      - name: Configure cross-compilation (Linux riscv64)
+        if: matrix.target == 'riscv64gc-unknown-linux-gnu'
+        run: |
+          echo '[target.riscv64gc-unknown-linux-gnu]' >> ~/.cargo/config.toml
+          echo 'linker = "riscv64-linux-gnu-gcc"' >> ~/.cargo/config.toml
+
+      - name: Install cross-compilation tools (Linux s390x)
+        if: matrix.target == 's390x-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-s390x-linux-gnu
+
+      - name: Configure cross-compilation (Linux s390x)
+        if: matrix.target == 's390x-unknown-linux-gnu'
+        run: |
+          echo '[target.s390x-unknown-linux-gnu]' >> ~/.cargo/config.toml
+          echo 'linker = "s390x-linux-gnu-gcc"' >> ~/.cargo/config.toml
+
+      - name: Install cross (FreeBSD)
+        if: matrix.use_cross == true
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -186,7 +228,12 @@ jobs:
             ${{ runner.os }}-${{ matrix.target }}-cargo-
 
       - name: Build release binary
+        if: matrix.use_cross != true
         run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build release binary (cross)
+        if: matrix.use_cross == true
+        run: cross build --release --target ${{ matrix.target }}
 
       - name: Prepare archive (Unix)
         if: matrix.os != 'windows-latest'
