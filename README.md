@@ -8,6 +8,8 @@ This is a drop-in replacement for the original Go implementation, with added sup
 
 See [ejson2env-rs](https://github.com/runlevel5/ejson2env-rs) for a useful tool to help with exporting a portion of secrets as environment variables for environments/tools that require this pattern.
 
+See [ejsonkms](https://github.com/runlevel5/ejsonkms-rs) to manage secrets with the help of AWS KMS.
+
 ## Why ejson?
 
 - **Safe version control** — Secrets can be safely stored in git
@@ -177,7 +179,19 @@ This ensures that:
 - Avoid passing private keys via command-line arguments; use `--key-from-stdin` instead
 - Add `*.ejson`, `*.etoml`, `*.eyaml` patterns to your deployment scripts to ensure secrets are decrypted at runtime
 
+## pre-commit hook
+
+A [pre-commit](https://pre-commit.com/) hook is also supported to automatically run `ejson encrypt` on all `.ejson`, `.eyaml`, `.eyml`, `.etoml`, and `.toml` files in a repository.
+
+To use, add the following to a `.pre-commit-config.yaml` file in your repository:
+
+```yaml
+repos:
+  - repo: https://github.com/runlevel5/ejson-rs
+    hooks:
+      - id: run-ejson-encrypt
+```
+
 ## See Also
 
 - [Original ejson documentation](https://shopify.github.io/ejson)
-- Use with [pre-commit](https://pre-commit.com/) to automatically encrypt secrets on commit

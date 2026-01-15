@@ -1,0 +1,7 @@
+- id: run-ejson-encrypt
+  name: run-ejson-encrypt
+  description: Run ejson encrypt on all ejson, eyaml, and etoml files in your repository.
+  entry: ejson encrypt
+  language: rust
+  types: [file]
+  files: '\.(ejson|eyaml|eyml|etoml)$'
