@@ -103,10 +103,6 @@ jobs:
             os: ubuntu-latest
             archive: tar.xz
             use_cross: true
-          - target: aarch64-unknown-freebsd
-            os: ubuntu-latest
-            archive: tar.xz
-            use_cross: true
           - target: riscv64gc-unknown-linux-gnu
             os: ubuntu-latest
             archive: tar.xz
