@@ -153,6 +153,30 @@ allowed_hosts:                         # Each element encrypted
   - "host2.example.com"
 ```
 
+## Security
+
+### File Permissions (Unix)
+
+ejson-rs automatically applies restrictive file permissions to protect sensitive data:
+
+| File Type | Permissions | Description |
+|-----------|-------------|-------------|
+| Private key files (`ejson keygen -w`) | `0o440` | Owner and group read-only |
+| Decrypted output files (`ejson decrypt -o`) | `0o600` | Owner read/write only |
+
+This ensures that:
+- Private keys cannot be accidentally modified
+- Decrypted secrets are not world-readable
+
+> **Note:** On non-Unix platforms (e.g., Windows), these permission settings are not applied. Take care to manually secure sensitive files on these systems.
+
+### Best Practices
+
+- Store private keys only on systems that need to decrypt secrets
+- Use `ejson keygen -w` to automatically save keys with proper permissions
+- Avoid passing private keys via command-line arguments; use `--key-from-stdin` instead
+- Add `*.ejson`, `*.etoml`, `*.eyaml` patterns to your deployment scripts to ensure secrets are decrypted at runtime
+
 ## See Also
 
 - [Original ejson documentation](https://shopify.github.io/ejson)
