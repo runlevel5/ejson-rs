@@ -17,7 +17,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use crypto::{CryptoError, Keypair};
-use format::FileFormat;
+use format::{FileFormat, FormatError};
 use json::JsonError;
 use thiserror::Error;
 use toml::TomlError;
@@ -37,6 +37,9 @@ pub enum EjsonError {
 
     #[error("yaml error: {0}")]
     Yaml(#[from] YamlError),
+
+    #[error("format error: {0}")]
+    Format(#[from] FormatError),
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -153,9 +156,10 @@ fn encrypt_data<W: Write>(
 /// The file format is auto-detected based on file extension:
 /// - `.ejson` or `.json` -> JSON format
 /// - `.etoml` or `.toml` -> TOML format
+/// - `.eyaml`, `.eyml`, `.yaml`, or `.yml` -> YAML format
 pub fn encrypt_file_in_place<P: AsRef<Path>>(file_path: P) -> Result<usize, EjsonError> {
     let file_path = file_path.as_ref();
-    let format = FileFormat::from_path(file_path);
+    let format = FileFormat::from_path(file_path)?;
     let metadata = fs::metadata(file_path)?;
     let permissions = metadata.permissions();
 
@@ -303,13 +307,14 @@ fn decrypt_data<W: Write>(
 /// The file format is auto-detected based on file extension:
 /// - `.ejson` or `.json` -> JSON format
 /// - `.etoml` or `.toml` -> TOML format
+/// - `.eyaml`, `.eyml`, `.yaml`, or `.yml` -> YAML format
 pub fn decrypt_file<P: AsRef<Path>>(
     file_path: P,
     keydir: &str,
     user_supplied_private_key: &str,
 ) -> Result<Vec<u8>, EjsonError> {
     let file_path = file_path.as_ref();
-    let format = FileFormat::from_path(file_path);
+    let format = FileFormat::from_path(file_path)?;
     let data = fs::read(file_path)?;
     let mut output = Vec::new();
     decrypt_data(
