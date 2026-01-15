@@ -6,6 +6,8 @@ This is a drop-in replacement for the original Go implementation, with added sup
 
 ![demo](http://burkelibbey.s3.amazonaws.com/ejson-demo.gif)
 
+See [ejson2env-rs](https://github.com/runlevel5/ejson2env-rs) for a useful tool to help with exporting a portion of secrets as environment variables for environments/tools that require this pattern.
+
 ## Why ejson?
 
 - **Safe version control** — Secrets can be safely stored in git
