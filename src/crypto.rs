@@ -8,7 +8,9 @@ use crypto_box::{
     aead::{Aead, AeadCore, OsRng},
     PublicKey, SalsaBox, SecretKey,
 };
+use std::fmt;
 use thiserror::Error;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::boxed_message::{is_boxed_message, BoxedMessage};
 
@@ -32,10 +34,24 @@ pub enum CryptoError {
 }
 
 /// A Curve25519 keypair for encryption/decryption operations.
-#[derive(Clone)]
+///
+/// Security: Private key material is automatically zeroized when the struct is dropped.
+/// Clone is intentionally not implemented to prevent uncontrolled duplication of key material.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct Keypair {
+    #[zeroize(skip)] // Public key doesn't need zeroizing
     pub public: [u8; 32],
     pub private: [u8; 32],
+}
+
+// Custom Debug implementation that redacts the private key
+impl fmt::Debug for Keypair {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Keypair")
+            .field("public", &hex::encode(self.public))
+            .field("private", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl Keypair {
@@ -61,29 +77,65 @@ impl Keypair {
     }
 
     /// Returns the private key as a hex-encoded string.
+    ///
+    /// Security: The returned string should be wrapped in `Zeroizing<String>` by the caller
+    /// if it will be stored.
     pub fn private_string(&self) -> String {
         hex::encode(self.private)
     }
 
     /// Create an Encrypter for encrypting messages to a peer's public key.
-    pub fn encrypter(&self, peer_public: [u8; 32]) -> Encrypter {
-        Encrypter::new(self.clone(), peer_public)
+    ///
+    /// This consumes the keypair to prevent multiple copies of key material.
+    pub fn into_encrypter(self, peer_public: [u8; 32]) -> Encrypter {
+        Encrypter::new(self, peer_public)
     }
 
     /// Create a Decrypter for decrypting messages.
+    ///
+    /// This consumes the keypair to prevent multiple copies of key material.
+    pub fn into_decrypter(self) -> Decrypter {
+        Decrypter::new(self)
+    }
+
+    /// Create an Encrypter while keeping the keypair (for cases where both encrypt and decrypt are needed).
+    ///
+    /// Security: This copies the private key material. Use sparingly.
+    pub fn encrypter(&self, peer_public: [u8; 32]) -> Encrypter {
+        let kp = Keypair::from_keys(self.public, self.private);
+        Encrypter::new(kp, peer_public)
+    }
+
+    /// Create a Decrypter while keeping the keypair (for cases where both encrypt and decrypt are needed).
+    ///
+    /// Security: This copies the private key material. Use sparingly.
     pub fn decrypter(&self) -> Decrypter {
-        Decrypter::new(self.clone())
+        let kp = Keypair::from_keys(self.public, self.private);
+        Decrypter::new(kp)
     }
 }
 
 /// Encrypter encrypts messages using NaCl Box.
 ///
 /// Typically created from an ephemeral keypair for a single encryption session.
+/// Security: Key material is automatically zeroized when dropped.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct Encrypter {
     keypair: Keypair,
-    #[allow(dead_code)]
+    #[zeroize(skip)]
     peer_public: [u8; 32],
+    #[zeroize(skip)] // SalsaBox handles its own cleanup
     salsa_box: SalsaBox,
+}
+
+// Custom Debug implementation that redacts sensitive data
+impl fmt::Debug for Encrypter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Encrypter")
+            .field("keypair", &"[REDACTED]")
+            .field("peer_public", &hex::encode(self.peer_public))
+            .finish()
+    }
 }
 
 impl Encrypter {
@@ -131,8 +183,20 @@ impl Encrypter {
 }
 
 /// Decrypter decrypts messages using NaCl Box.
+///
+/// Security: Key material is automatically zeroized when dropped.
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct Decrypter {
     keypair: Keypair,
+}
+
+// Custom Debug implementation that redacts sensitive data
+impl fmt::Debug for Decrypter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Decrypter")
+            .field("keypair", &"[REDACTED]")
+            .finish()
+    }
 }
 
 impl Decrypter {
@@ -176,9 +240,10 @@ mod tests {
     fn test_encrypt_decrypt_roundtrip() {
         let sender_kp = Keypair::generate().unwrap();
         let receiver_kp = Keypair::generate().unwrap();
+        let receiver_public = receiver_kp.public;
 
-        let encrypter = sender_kp.encrypter(receiver_kp.public);
-        let decrypter = receiver_kp.decrypter();
+        let encrypter = sender_kp.into_encrypter(receiver_public);
+        let decrypter = receiver_kp.into_decrypter();
 
         let plaintext = b"Hello, World!";
         let encrypted = encrypter.encrypt(plaintext).unwrap();
@@ -199,5 +264,13 @@ mod tests {
         // Second encryption should return same bytes
         let double_encrypted = encrypter.encrypt(&encrypted).unwrap();
         assert_eq!(encrypted, double_encrypted);
+    }
+
+    #[test]
+    fn test_keypair_debug_redacts_private_key() {
+        let kp = Keypair::generate().unwrap();
+        let debug_output = format!("{:?}", kp);
+        assert!(debug_output.contains("[REDACTED]"));
+        assert!(!debug_output.contains(&kp.private_string()));
     }
 }

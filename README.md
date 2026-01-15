@@ -110,7 +110,7 @@ Format detection is automatic based on file extension:
 |--------|------------|
 | JSON   | `.ejson`, `.json` |
 | TOML   | `.etoml`, `.toml` |
-| YAML   | `.eyaml`, `.yaml`, `.yml` |
+| YAML   | `.eyaml`, `.eyml`, `.yaml`, `.yml` |
 
 ### Encryption Rules
 

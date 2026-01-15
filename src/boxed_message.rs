@@ -12,6 +12,7 @@
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use regex::Regex;
+use std::fmt;
 use std::sync::LazyLock;
 use thiserror::Error;
 
@@ -40,12 +41,26 @@ pub enum BoxedMessageError {
 }
 
 /// A boxed message containing the encrypted data along with metadata needed for decryption.
-#[derive(Debug, Clone)]
+///
+/// Security: Debug output redacts sensitive cryptographic material.
+#[derive(Clone)]
 pub struct BoxedMessage {
     pub schema_version: u8,
     pub encrypter_public: [u8; 32],
     pub nonce: [u8; 24],
     pub box_data: Vec<u8>,
+}
+
+// Custom Debug implementation that redacts sensitive cryptographic material
+impl fmt::Debug for BoxedMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BoxedMessage")
+            .field("schema_version", &self.schema_version)
+            .field("encrypter_public", &"[REDACTED]")
+            .field("nonce", &"[REDACTED]")
+            .field("box_data", &format!("[{} bytes]", self.box_data.len()))
+            .finish()
+    }
 }
 
 impl BoxedMessage {

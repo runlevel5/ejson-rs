@@ -1,6 +1,6 @@
 [package]
 name = "ejson"
-version = "0.0.7"
+version = "0.0.8"
 edition = "2021"
 authors = ["Trung Lê <8@tle.id.au>"]
 description = "Manage encrypted secrets using public key encryption"
@@ -13,6 +13,8 @@ categories = ["cryptography", "command-line-utilities"]
 # Cryptography
 crypto_box = "0.9"
 rand = "0.8"
+zeroize = { version = "1.8", features = ["derive"] }
+subtle = "2.6"
 
 # CLI
 clap = { version = "4.5", features = ["derive", "env"] }
@@ -38,6 +40,9 @@ anyhow = "1.0"
 
 # Regex for message parsing
 regex = "1.12"
+
+# File locking
+fs4 = "0.12"
 
 [dev-dependencies]
 tempfile = "3.24"
