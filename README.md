@@ -8,6 +8,8 @@ This is a drop-in replacement for the original Go implementation, with added sup
 
 See [ejson2env-rs](https://github.com/runlevel5/ejson2env-rs) for a useful tool to help with exporting a portion of secrets as environment variables for environments/tools that require this pattern.
 
+See [ejsonkms](https://github.com/runlevel5/ejsonkms-rs) to manage secrets with the help of AWS KMS.
+
 ## Why ejson?
 
 - **Safe version control** — Secrets can be safely stored in git
