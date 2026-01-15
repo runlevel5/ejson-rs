@@ -11,8 +11,7 @@ use clap::{Parser, Subcommand};
 
 /// Manage encrypted secrets using public key encryption.
 #[derive(Parser)]
-#[command(name = "ejson")]
-#[command(version, author, about)]
+#[command(author, version, about, long_about = None)]
 struct Cli {
     /// Directory containing EJSON keys
     #[arg(
