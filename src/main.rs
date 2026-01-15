@@ -142,7 +142,15 @@ fn decrypt_action(
         .map_err(|e| format!("Decryption failed: {}", e))?;
 
     if let Some(out_path) = output {
-        fs::write(out_path, &decrypted)
+        // Write decrypted output with restrictive permissions (owner read/write only)
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(out_path)
+            .map_err(|e| format!("Failed to create output file: {}", e))?;
+        file.write_all(&decrypted)
             .map_err(|e| format!("Failed to write output file: {}", e))?;
     } else {
         io::stdout()
@@ -166,5 +174,124 @@ trait OpenOptionsExt {
 impl OpenOptionsExt for fs::OpenOptions {
     fn mode(&mut self, _mode: u32) -> &mut Self {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Helper to set up a test environment with keypair and encrypted file
+    fn setup_test_env() -> (TempDir, TempDir, PathBuf, String) {
+        // Generate a keypair
+        let (pub_key, priv_key) = ejson::generate_keypair().unwrap();
+
+        // Create a temporary keydir and write the private key
+        let keydir = TempDir::new().unwrap();
+        let key_file = keydir.path().join(&pub_key);
+        fs::write(&key_file, &priv_key).unwrap();
+
+        // Create a temporary directory for test files
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create an encrypted ejson file
+        let ejson_path = temp_dir.path().join("secrets.ejson");
+        let json_content = format!(
+            r#"{{"_public_key": "{}", "secret": "my secret value"}}"#,
+            pub_key
+        );
+        fs::write(&ejson_path, &json_content).unwrap();
+
+        // Encrypt the file
+        ejson::encrypt_file_in_place(&ejson_path).unwrap();
+
+        (keydir, temp_dir, ejson_path, pub_key)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_decrypt_output_file_has_restrictive_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let (keydir, temp_dir, ejson_path, _) = setup_test_env();
+
+        // Define output path for decrypted file
+        let output_path = temp_dir.path().join("decrypted.json");
+
+        // Run decrypt_action with output file
+        decrypt_action(
+            &ejson_path,
+            keydir.path().to_str().unwrap(),
+            Some(output_path.as_path()),
+            false,
+        )
+        .unwrap();
+
+        // Verify the output file exists
+        assert!(output_path.exists());
+
+        // Verify the output file has restrictive permissions (0o600)
+        let metadata = fs::metadata(&output_path).unwrap();
+        let permissions = metadata.permissions();
+        let mode = permissions.mode() & 0o777; // Mask to get only permission bits
+
+        assert_eq!(
+            mode, 0o600,
+            "Decrypted output file should have 0o600 permissions, got 0o{:o}",
+            mode
+        );
+
+        // Verify the content was actually decrypted
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("my secret value"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_keygen_key_file_has_restrictive_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let keydir = temp_dir.path().to_str().unwrap();
+
+        // Run keygen with write flag
+        keygen_action(keydir, true).unwrap();
+
+        // Find the key file (should be the only file in keydir)
+        let entries: Vec<_> = fs::read_dir(keydir).unwrap().collect();
+        assert_eq!(entries.len(), 1, "Expected exactly one key file");
+
+        let key_file = entries[0].as_ref().unwrap().path();
+
+        // Verify the key file has restrictive permissions (0o440)
+        let metadata = fs::metadata(&key_file).unwrap();
+        let permissions = metadata.permissions();
+        let mode = permissions.mode() & 0o777;
+
+        assert_eq!(
+            mode, 0o440,
+            "Key file should have 0o440 permissions, got 0o{:o}",
+            mode
+        );
+    }
+
+    #[test]
+    fn test_decrypt_action_writes_correct_content() {
+        let (keydir, temp_dir, ejson_path, _) = setup_test_env();
+
+        let output_path = temp_dir.path().join("decrypted.json");
+
+        decrypt_action(
+            &ejson_path,
+            keydir.path().to_str().unwrap(),
+            Some(output_path.as_path()),
+            false,
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("my secret value"));
+        assert!(!content.contains("EJ["));
     }
 }
