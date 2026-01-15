@@ -94,10 +94,11 @@ fn keygen_action(keydir: &str, write_flag: bool) -> Result<(), String> {
         fs::create_dir_all(keydir).map_err(|e| format!("Failed to create keydir: {}", e))?;
 
         // Write private key with restrictive permissions
+        // Use create_new(true) to ensure atomic creation with correct permissions
+        // and to prevent accidentally overwriting an existing key
         let mut file = fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .mode(0o440)
             .open(&key_file)
             .map_err(|e| format!("Failed to write key file: {}", e))?;
@@ -143,10 +144,16 @@ fn decrypt_action(
 
     if let Some(out_path) = output {
         // Write decrypted output with restrictive permissions (owner read/write only)
+        // Use create_new(true) to atomically create with correct permissions,
+        // preventing a window where the file has incorrect permissions.
+        // If file exists, remove it first and create fresh to ensure correct permissions.
+        if out_path.exists() {
+            fs::remove_file(out_path)
+                .map_err(|e| format!("Failed to remove existing output file: {}", e))?;
+        }
         let mut file = fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .mode(0o600)
             .open(out_path)
             .map_err(|e| format!("Failed to create output file: {}", e))?;
