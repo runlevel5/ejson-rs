@@ -1,6 +1,6 @@
 //! EJSON CLI - Manage encrypted secrets using public key encryption.
 //!
-//! Supports JSON (.ejson, .json), TOML (.etoml, .toml), and YAML (.eyaml, .yaml, .yml) file formats.
+//! Supports JSON (.ejson, .json), TOML (.etoml, .toml), and YAML (.eyaml, .eyml, .yaml, .yml) file formats.
 
 use std::fs;
 use std::io::{self, Read, Write};
@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::process;
 
 use clap::{Parser, Subcommand};
+use zeroize::Zeroizing;
 
 /// Manage encrypted secrets using public key encryption.
 #[derive(Parser)]
@@ -40,7 +41,7 @@ enum Commands {
     /// (Re-)encrypt one or more EJSON/ETOML/EYAML files
     #[command(alias = "e")]
     Encrypt {
-        /// Files to encrypt (format detected by extension: .ejson/.json, .etoml/.toml, or .eyaml/.yaml/.yml)
+        /// Files to encrypt (format detected by extension: .ejson/.json, .etoml/.toml, or .eyaml/.eyml/.yaml/.yml)
         #[arg(required = true)]
         files: Vec<PathBuf>,
     },
@@ -48,7 +49,7 @@ enum Commands {
     /// Decrypt an EJSON/ETOML/EYAML file
     #[command(alias = "d")]
     Decrypt {
-        /// File to decrypt (format detected by extension: .ejson/.json, .etoml/.toml, or .eyaml/.yaml/.yml)
+        /// File to decrypt (format detected by extension: .ejson/.json, .etoml/.toml, or .eyaml/.eyml/.yaml/.yml)
         file: PathBuf,
 
         /// Print output to the provided file, rather than stdout
@@ -84,6 +85,9 @@ fn keygen_action(keydir: &str, write_flag: bool) -> Result<(), String> {
     let (pub_key, priv_key) =
         ejson::generate_keypair().map_err(|e| format!("Key generation failed: {}", e))?;
 
+    // Wrap private key in Zeroizing for automatic cleanup
+    let priv_key = Zeroizing::new(priv_key);
+
     if write_flag {
         let key_file = format!("{}/{}", keydir, pub_key);
 
@@ -100,11 +104,17 @@ fn keygen_action(keydir: &str, write_flag: bool) -> Result<(), String> {
             .open(&key_file)
             .map_err(|e| format!("Failed to write key file: {}", e))?;
 
-        writeln!(file, "{}", priv_key).map_err(|e| format!("Failed to write key: {}", e))?;
+        writeln!(file, "{}", *priv_key).map_err(|e| format!("Failed to write key: {}", e))?;
 
         println!("{}", pub_key);
     } else {
-        println!("Public Key:\n{}\nPrivate Key:\n{}", pub_key, priv_key);
+        // Print warning to stderr before displaying the private key
+        eprintln!("WARNING: The private key will be displayed below.");
+        eprintln!("         This key should be kept secret and stored securely.");
+        eprintln!("         Consider using 'ejson keygen -w' to write directly to keydir.");
+        eprintln!("         Terminal scrollback may retain this key.");
+        eprintln!();
+        println!("Public Key:\n{}\nPrivate Key:\n{}", pub_key, *priv_key);
     }
 
     Ok(())
@@ -126,36 +136,50 @@ fn decrypt_action(
     output: Option<&std::path::Path>,
     key_from_stdin: bool,
 ) -> Result<(), String> {
-    let user_supplied_private_key = if key_from_stdin {
-        let mut stdin_content = String::new();
+    // Use Zeroizing wrapper for private key to ensure it's cleared from memory
+    let user_supplied_private_key: Zeroizing<String> = if key_from_stdin {
+        let mut stdin_content = Zeroizing::new(String::new());
         io::stdin()
             .read_to_string(&mut stdin_content)
             .map_err(|e| format!("Failed to read from stdin: {}", e))?;
-        stdin_content.trim().to_string()
+        Zeroizing::new(stdin_content.trim().to_string())
     } else {
-        String::new()
+        Zeroizing::new(String::new())
     };
 
     let decrypted = ejson::decrypt_file(file, keydir, &user_supplied_private_key)
         .map_err(|e| format!("Decryption failed: {}", e))?;
 
     if let Some(out_path) = output {
-        // Write decrypted output with restrictive permissions (owner read/write only)
-        // Use create_new(true) to atomically create with correct permissions,
-        // preventing a window where the file has incorrect permissions.
-        // If file exists, remove it first and create fresh to ensure correct permissions.
-        if out_path.exists() {
-            fs::remove_file(out_path)
-                .map_err(|e| format!("Failed to remove existing output file: {}", e))?;
+        // Write decrypted output with restrictive permissions
+        // Use atomic write pattern: write to temp file, then rename
+        // This prevents race conditions and ensures correct permissions
+
+        let parent = out_path.parent().unwrap_or(std::path::Path::new("."));
+
+        // Create a temporary file in the same directory for atomic rename
+        let temp_path = parent.join(format!(".ejson_decrypt_{}.tmp", std::process::id()));
+
+        // Write to temp file with restrictive permissions
+        {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&temp_path)
+                .map_err(|e| format!("Failed to create temporary file: {}", e))?;
+            file.write_all(&decrypted)
+                .map_err(|e| format!("Failed to write temporary file: {}", e))?;
+            file.sync_all()
+                .map_err(|e| format!("Failed to sync temporary file: {}", e))?;
         }
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(out_path)
-            .map_err(|e| format!("Failed to create output file: {}", e))?;
-        file.write_all(&decrypted)
-            .map_err(|e| format!("Failed to write output file: {}", e))?;
+
+        // Atomic rename to final destination
+        fs::rename(&temp_path, out_path).map_err(|e| {
+            // Clean up temp file on error
+            let _ = fs::remove_file(&temp_path);
+            format!("Failed to rename temporary file to output: {}", e)
+        })?;
     } else {
         io::stdout()
             .write_all(&decrypted)
@@ -297,5 +321,28 @@ mod tests {
         let content = fs::read_to_string(&output_path).unwrap();
         assert!(content.contains("my secret value"));
         assert!(!content.contains("EJ["));
+    }
+
+    #[test]
+    fn test_decrypt_atomic_write_overwrites_existing() {
+        let (keydir, temp_dir, ejson_path, _) = setup_test_env();
+
+        let output_path = temp_dir.path().join("decrypted.json");
+
+        // Create an existing file
+        fs::write(&output_path, "old content").unwrap();
+
+        // Decrypt should overwrite atomically
+        decrypt_action(
+            &ejson_path,
+            keydir.path().to_str().unwrap(),
+            Some(output_path.as_path()),
+            false,
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(&output_path).unwrap();
+        assert!(content.contains("my secret value"));
+        assert!(!content.contains("old content"));
     }
 }
