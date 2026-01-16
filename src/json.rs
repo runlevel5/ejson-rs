@@ -380,6 +380,38 @@ fn escape_json_string(s: &str) -> String {
     result
 }
 
+/// Trim the first leading underscore from all keys in a JSON document.
+/// The `_public_key` field is excluded from trimming.
+///
+/// This uses serde_json to parse and rebuild the JSON, which means formatting
+/// may change slightly (though keys order is preserved).
+pub fn trim_underscore_prefix_from_keys(data: &[u8]) -> Result<Vec<u8>, JsonError> {
+    let value: Value = serde_json::from_slice(data).map_err(|_| JsonError::InvalidJson)?;
+    let transformed = transform_json_keys(value);
+    serde_json::to_vec_pretty(&transformed).map_err(|_| JsonError::InvalidJson)
+}
+
+fn transform_json_keys(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let new_map: serde_json::Map<String, Value> = map
+                .into_iter()
+                .map(|(key, val)| {
+                    let new_key = if key.starts_with('_') && key != "_public_key" {
+                        key[1..].to_string()
+                    } else {
+                        key
+                    };
+                    (new_key, transform_json_keys(val))
+                })
+                .collect();
+            Value::Object(new_map)
+        }
+        Value::Array(arr) => Value::Array(arr.into_iter().map(transform_json_keys).collect()),
+        other => other,
+    }
+}
+
 /// Collapse multiline string literals by replacing embedded newlines with \n.
 ///
 /// JSON doesn't handle multiline literals, so we convert embedded newlines
@@ -491,5 +523,44 @@ mod tests {
         let json = b"{\"key\": \"line1\nline2\"}";
         let result = collapse_multiline_string_literals(json).unwrap();
         assert_eq!(result, b"{\"key\": \"line1\\nline2\"}");
+    }
+
+    #[test]
+    fn test_trim_underscore_prefix_from_keys() {
+        let json = br#"{"_public_key": "abc123", "_secret": "value", "normal": "data"}"#;
+        let result = trim_underscore_prefix_from_keys(json).unwrap();
+        let result_str = String::from_utf8_lossy(&result);
+
+        // _public_key should NOT be trimmed
+        assert!(result_str.contains(r#""_public_key""#));
+        // Other underscore keys should have it removed
+        assert!(result_str.contains(r#""secret""#));
+        assert!(result_str.contains(r#""normal""#));
+        // Should not have underscore prefix on _secret
+        assert!(!result_str.contains(r#""_secret""#));
+    }
+
+    #[test]
+    fn test_trim_underscore_prefix_nested() {
+        let json = br#"{"_outer": {"_inner": "value", "normal": "data"}}"#;
+        let result = trim_underscore_prefix_from_keys(json).unwrap();
+        let result_str = String::from_utf8_lossy(&result);
+
+        // Both nested keys should have underscore removed
+        assert!(result_str.contains(r#""outer""#));
+        assert!(result_str.contains(r#""inner""#));
+        assert!(!result_str.contains(r#""_outer""#));
+        assert!(!result_str.contains(r#""_inner""#));
+    }
+
+    #[test]
+    fn test_trim_underscore_prefix_no_underscore() {
+        let json = br#"{"normal": "value", "key": "data"}"#;
+        let result = trim_underscore_prefix_from_keys(json).unwrap();
+        let result_str = String::from_utf8_lossy(&result);
+
+        // Keys without underscore should remain unchanged
+        assert!(result_str.contains(r#""normal""#));
+        assert!(result_str.contains(r#""key""#));
     }
 }

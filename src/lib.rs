@@ -429,11 +429,15 @@ fn decrypt_data<W: Write>(
 /// - `.etoml` or `.toml` -> TOML format
 /// - `.eyaml`, `.eyml`, `.yaml`, or `.yml` -> YAML format
 ///
+/// If `trim_underscore_prefix` is true, the first leading underscore will be
+/// stripped from all keys in the output.
+///
 /// Security: Uses file locking and size limits.
 pub fn decrypt_file<P: AsRef<Path>>(
     file_path: P,
     keydir: &str,
     user_supplied_private_key: &str,
+    trim_underscore_prefix: bool,
 ) -> Result<Vec<u8>, EjsonError> {
     let file_path = file_path.as_ref();
     let format = FileFormat::from_path(file_path)?;
@@ -446,7 +450,27 @@ pub fn decrypt_file<P: AsRef<Path>>(
         user_supplied_private_key,
         format,
     )?;
+
+    if trim_underscore_prefix {
+        output = trim_underscore_prefix_from_keys(&output, format)?;
+    }
+
     Ok(output)
+}
+
+/// Trim the first leading underscore from all keys in the data.
+///
+/// This is a post-processing step applied after decryption when the
+/// `--trim-underscore-prefix` flag is used.
+fn trim_underscore_prefix_from_keys(
+    data: &[u8],
+    format: FileFormat,
+) -> Result<Vec<u8>, EjsonError> {
+    match format {
+        FileFormat::Json => Ok(json::trim_underscore_prefix_from_keys(data)?),
+        FileFormat::Toml => Ok(toml::trim_underscore_prefix_from_keys(data)?),
+        FileFormat::Yaml => Ok(yaml::trim_underscore_prefix_from_keys(data)?),
+    }
 }
 
 fn find_private_key(

@@ -104,6 +104,16 @@ $ ejson decrypt secrets.ejson
 
 The private key must be in the keydir, named after the public key. If you used `ejson keygen -w`, this is already set up.
 
+#### Trimming Underscore Prefixes
+
+When decrypting, you can strip the leading underscore from keys (except `_public_key`) using the `--trim-underscore-prefix` flag:
+
+```bash
+$ ejson decrypt --trim-underscore-prefix secrets.ejson
+```
+
+This transforms keys like `_database_username` to `database_username` in the output, which is useful when consuming decrypted secrets in systems that don't expect underscore-prefixed keys.
+
 ## Supported Formats
 
 Format detection is automatic based on file extension:

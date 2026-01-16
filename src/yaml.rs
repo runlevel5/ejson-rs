@@ -136,6 +136,44 @@ where
     }
 }
 
+/// Trim the first leading underscore from all keys in a YAML document.
+/// The `_public_key` field is excluded from trimming.
+pub fn trim_underscore_prefix_from_keys(data: &[u8]) -> Result<Vec<u8>, YamlError> {
+    let s = String::from_utf8_lossy(data);
+    let doc: Value = serde_yml::from_str(&s).map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
+
+    let transformed = transform_yaml_keys(doc);
+
+    let output =
+        serde_yml::to_string(&transformed).map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
+    Ok(output.into_bytes())
+}
+
+fn transform_yaml_keys(value: Value) -> Value {
+    match value {
+        Value::Mapping(map) => {
+            let new_map: Mapping = map
+                .into_iter()
+                .map(|(key, val)| {
+                    let new_key = if let Some(key_str) = key.as_str() {
+                        if key_str.starts_with('_') && key_str != "_public_key" {
+                            Value::String(key_str[1..].to_string())
+                        } else {
+                            key
+                        }
+                    } else {
+                        key
+                    };
+                    (new_key, transform_yaml_keys(val))
+                })
+                .collect();
+            Value::Mapping(new_map)
+        }
+        Value::Sequence(seq) => Value::Sequence(seq.into_iter().map(transform_yaml_keys).collect()),
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,5 +295,39 @@ ratio: 1.5
         assert!(result_str.contains("port: 8080"));
         assert!(result_str.contains("enabled: true"));
         assert!(result_str.contains("ratio: 1.5"));
+    }
+
+    #[test]
+    fn test_trim_underscore_prefix_from_keys() {
+        let yaml = br#"_public_key: "abc123"
+_secret: "value"
+normal: "data"
+"#;
+        let result = trim_underscore_prefix_from_keys(yaml).unwrap();
+        let result_str = String::from_utf8_lossy(&result);
+
+        // _public_key should NOT be trimmed
+        assert!(result_str.contains("_public_key:"));
+        // Other underscore keys should have it removed
+        assert!(result_str.contains("secret:"));
+        assert!(result_str.contains("normal:"));
+        // Should not have underscore prefix on _secret
+        assert!(!result_str.contains("_secret"));
+    }
+
+    #[test]
+    fn test_trim_underscore_prefix_nested_mapping() {
+        let yaml = br#"_outer:
+  _inner: "value"
+  normal: "data"
+"#;
+        let result = trim_underscore_prefix_from_keys(yaml).unwrap();
+        let result_str = String::from_utf8_lossy(&result);
+
+        // Both nested keys should have underscore removed
+        assert!(result_str.contains("outer:"));
+        assert!(result_str.contains("inner:"));
+        assert!(!result_str.contains("_outer"));
+        assert!(!result_str.contains("_inner"));
     }
 }

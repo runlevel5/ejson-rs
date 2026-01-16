@@ -59,6 +59,10 @@ enum Commands {
         /// Read the private key from STDIN
         #[arg(long = "key-from-stdin")]
         key_from_stdin: bool,
+
+        /// Strip the first leading underscore from keys in the output
+        #[arg(long = "trim-underscore-prefix")]
+        trim_underscore_prefix: bool,
     },
 }
 
@@ -72,7 +76,14 @@ fn main() {
             file,
             output,
             key_from_stdin,
-        } => decrypt_action(&file, &cli.keydir, output.as_deref(), key_from_stdin),
+            trim_underscore_prefix,
+        } => decrypt_action(
+            &file,
+            &cli.keydir,
+            output.as_deref(),
+            key_from_stdin,
+            trim_underscore_prefix,
+        ),
     };
 
     if let Err(e) = result {
@@ -135,6 +146,7 @@ fn decrypt_action(
     keydir: &str,
     output: Option<&std::path::Path>,
     key_from_stdin: bool,
+    trim_underscore_prefix: bool,
 ) -> Result<(), String> {
     // Use Zeroizing wrapper for private key to ensure it's cleared from memory
     let user_supplied_private_key: Zeroizing<String> = if key_from_stdin {
@@ -147,8 +159,13 @@ fn decrypt_action(
         Zeroizing::new(String::new())
     };
 
-    let decrypted = ejson::decrypt_file(file, keydir, &user_supplied_private_key)
-        .map_err(|e| format!("Decryption failed: {}", e))?;
+    let decrypted = ejson::decrypt_file(
+        file,
+        keydir,
+        &user_supplied_private_key,
+        trim_underscore_prefix,
+    )
+    .map_err(|e| format!("Decryption failed: {}", e))?;
 
     if let Some(out_path) = output {
         // Write decrypted output with restrictive permissions
@@ -253,6 +270,7 @@ mod tests {
             keydir.path().to_str().unwrap(),
             Some(output_path.as_path()),
             false,
+            false,
         )
         .unwrap();
 
@@ -315,6 +333,7 @@ mod tests {
             keydir.path().to_str().unwrap(),
             Some(output_path.as_path()),
             false,
+            false,
         )
         .unwrap();
 
@@ -337,6 +356,7 @@ mod tests {
             &ejson_path,
             keydir.path().to_str().unwrap(),
             Some(output_path.as_path()),
+            false,
             false,
         )
         .unwrap();
