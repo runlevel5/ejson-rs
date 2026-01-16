@@ -25,6 +25,9 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use crypto::{CryptoError, Keypair};
+
+// Re-export key type for public API
+pub use crypto::KeyBytes;
 use format::{FileFormat, FormatError};
 use fs4::fs_std::FileExt;
 use json::JsonError;
@@ -184,59 +187,45 @@ fn encrypt_data<W: Write>(
     // Generate ephemeral keypair for this encryption session
     let my_kp = Keypair::generate()?;
 
-    match format {
+    // Helper closure to perform encryption
+    let do_encrypt = |pubkey: KeyBytes, data: &[u8]| -> Result<Vec<u8>, EjsonError> {
+        let encrypter = my_kp.encrypter(pubkey);
+        let encrypt_fn = |plaintext: &[u8]| encrypter.encrypt(plaintext).map_err(|e| e.to_string());
+
+        match format {
+            FileFormat::Json => {
+                let walker = json::Walker::new(encrypt_fn);
+                Ok(walker.walk(data)?)
+            }
+            FileFormat::Toml => {
+                let walker = toml::Walker::new(encrypt_fn);
+                Ok(walker.walk(data)?)
+            }
+            FileFormat::Yaml => {
+                let walker = yaml::Walker::new(encrypt_fn);
+                Ok(walker.walk(data)?)
+            }
+        }
+    };
+
+    let new_data = match format {
         FileFormat::Json => {
-            // Collapse multiline strings for JSON
             let data = json::collapse_multiline_string_literals(data)?;
-
-            // Extract the public key from the document
             let pubkey = json::extract_public_key(&data)?;
-
-            // Create encrypter
-            let encrypter = my_kp.encrypter(pubkey);
-
-            // Walk and encrypt
-            let walker = json::Walker::new(|plaintext: &[u8]| {
-                encrypter.encrypt(plaintext).map_err(|e| e.to_string())
-            });
-
-            let new_data = walker.walk(&data)?;
-            output.write_all(&new_data)?;
-            Ok(new_data.len())
+            do_encrypt(pubkey, &data)?
         }
         FileFormat::Toml => {
-            // Extract the public key from the document
             let pubkey = toml::extract_public_key(data)?;
-
-            // Create encrypter
-            let encrypter = my_kp.encrypter(pubkey);
-
-            // Walk and encrypt
-            let walker = toml::Walker::new(|plaintext: &[u8]| {
-                encrypter.encrypt(plaintext).map_err(|e| e.to_string())
-            });
-
-            let new_data = walker.walk(data)?;
-            output.write_all(&new_data)?;
-            Ok(new_data.len())
+            do_encrypt(pubkey, data)?
         }
         FileFormat::Yaml => {
-            // Extract the public key from the document
             let pubkey = yaml::extract_public_key(data)?;
-
-            // Create encrypter
-            let encrypter = my_kp.encrypter(pubkey);
-
-            // Walk and encrypt
-            let walker = yaml::Walker::new(|plaintext: &[u8]| {
-                encrypter.encrypt(plaintext).map_err(|e| e.to_string())
-            });
-
-            let new_data = walker.walk(data)?;
-            output.write_all(&new_data)?;
-            Ok(new_data.len())
+            do_encrypt(pubkey, data)?
         }
-    }
+    };
+
+    output.write_all(&new_data)?;
+    Ok(new_data.len())
 }
 
 /// Encrypt a file in place with file locking.
@@ -345,80 +334,35 @@ fn decrypt_data<W: Write>(
     user_supplied_private_key: &str,
     format: FileFormat,
 ) -> Result<(), EjsonError> {
-    match format {
-        FileFormat::Json => {
-            // Extract the public key from the document
-            let pubkey = json::extract_public_key(data)?;
+    // Extract public key based on format
+    let pubkey = match format {
+        FileFormat::Json => json::extract_public_key(data)?,
+        FileFormat::Toml => toml::extract_public_key(data)?,
+        FileFormat::Yaml => yaml::extract_public_key(data)?,
+    };
 
-            // Find the private key
-            let privkey = find_private_key(&pubkey, keydir, user_supplied_private_key)?;
+    // Find the private key and create decrypter
+    let privkey = find_private_key(&pubkey, keydir, user_supplied_private_key)?;
+    let kp = Keypair::from_keys(pubkey, privkey);
+    let decrypter = kp.decrypter();
 
-            // Create decrypter
-            let kp = Keypair::from_keys(pubkey, privkey);
-            let decrypter = kp.decrypter();
-
-            // Walk and decrypt
-            let walker = json::Walker::new(|ciphertext: &[u8]| {
-                // Only decrypt if it looks like an encrypted message
-                if boxed_message::is_boxed_message(ciphertext) {
-                    decrypter.decrypt(ciphertext).map_err(|e| e.to_string())
-                } else {
-                    Ok(ciphertext.to_vec())
-                }
-            });
-
-            let new_data = walker.walk(data)?;
-            output.write_all(&new_data)?;
+    // Create decryption closure that conditionally decrypts
+    let decrypt_fn = |ciphertext: &[u8]| {
+        if boxed_message::is_boxed_message(ciphertext) {
+            decrypter.decrypt(ciphertext).map_err(|e| e.to_string())
+        } else {
+            Ok(ciphertext.to_vec())
         }
-        FileFormat::Toml => {
-            // Extract the public key from the document
-            let pubkey = toml::extract_public_key(data)?;
+    };
 
-            // Find the private key
-            let privkey = find_private_key(&pubkey, keydir, user_supplied_private_key)?;
+    // Walk and decrypt based on format
+    let new_data = match format {
+        FileFormat::Json => json::Walker::new(decrypt_fn).walk(data)?,
+        FileFormat::Toml => toml::Walker::new(decrypt_fn).walk(data)?,
+        FileFormat::Yaml => yaml::Walker::new(decrypt_fn).walk(data)?,
+    };
 
-            // Create decrypter
-            let kp = Keypair::from_keys(pubkey, privkey);
-            let decrypter = kp.decrypter();
-
-            // Walk and decrypt
-            let walker = toml::Walker::new(|ciphertext: &[u8]| {
-                // Only decrypt if it looks like an encrypted message
-                if boxed_message::is_boxed_message(ciphertext) {
-                    decrypter.decrypt(ciphertext).map_err(|e| e.to_string())
-                } else {
-                    Ok(ciphertext.to_vec())
-                }
-            });
-
-            let new_data = walker.walk(data)?;
-            output.write_all(&new_data)?;
-        }
-        FileFormat::Yaml => {
-            // Extract the public key from the document
-            let pubkey = yaml::extract_public_key(data)?;
-
-            // Find the private key
-            let privkey = find_private_key(&pubkey, keydir, user_supplied_private_key)?;
-
-            // Create decrypter
-            let kp = Keypair::from_keys(pubkey, privkey);
-            let decrypter = kp.decrypter();
-
-            // Walk and decrypt
-            let walker = yaml::Walker::new(|ciphertext: &[u8]| {
-                // Only decrypt if it looks like an encrypted message
-                if boxed_message::is_boxed_message(ciphertext) {
-                    decrypter.decrypt(ciphertext).map_err(|e| e.to_string())
-                } else {
-                    Ok(ciphertext.to_vec())
-                }
-            });
-
-            let new_data = walker.walk(data)?;
-            output.write_all(&new_data)?;
-        }
-    }
+    output.write_all(&new_data)?;
     Ok(())
 }
 
@@ -474,15 +418,15 @@ fn trim_underscore_prefix_from_keys(
 }
 
 fn find_private_key(
-    pubkey: &[u8; 32],
+    pubkey: &KeyBytes,
     keydir: &str,
     user_supplied_private_key: &str,
-) -> Result<[u8; 32], EjsonError> {
+) -> Result<KeyBytes, EjsonError> {
     // Use Zeroizing to ensure the private key string is cleared from memory
-    let privkey_string: Zeroizing<String> = if !user_supplied_private_key.is_empty() {
-        Zeroizing::new(user_supplied_private_key.to_string())
-    } else {
+    let privkey_string: Zeroizing<String> = if user_supplied_private_key.is_empty() {
         Zeroizing::new(read_private_key_from_disk(pubkey, keydir)?)
+    } else {
+        Zeroizing::new(user_supplied_private_key.to_string())
     };
 
     // Decode hex - the intermediate Vec will be small and short-lived
@@ -498,8 +442,10 @@ fn find_private_key(
         return Err(EjsonError::InvalidPrivateKey);
     }
 
-    let mut privkey = [0u8; 32];
-    privkey.copy_from_slice(&privkey_bytes);
+    let privkey: KeyBytes = privkey_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| EjsonError::InvalidPrivateKey)?;
 
     // Zeroize the intermediate bytes
     privkey_bytes.iter_mut().for_each(|b| *b = 0);
@@ -507,9 +453,10 @@ fn find_private_key(
     Ok(privkey)
 }
 
-fn read_private_key_from_disk(pubkey: &[u8; 32], keydir: &str) -> Result<String, EjsonError> {
+fn read_private_key_from_disk(pubkey: &KeyBytes, keydir: &str) -> Result<String, EjsonError> {
     let pubkey_hex = hex::encode(pubkey);
-    let key_path = Path::new(keydir).join(&pubkey_hex);
+    let keydir_path = Path::new(keydir);
+    let key_path = keydir_path.join(&pubkey_hex);
 
     // Validate the constructed path
     validate_path(&key_path)?;
@@ -517,7 +464,7 @@ fn read_private_key_from_disk(pubkey: &[u8; 32], keydir: &str) -> Result<String,
     // Verify the path is still within keydir after resolution
     // This prevents path traversal via malicious public key hex
     if let (Ok(canonical_keydir), Ok(canonical_key_path)) =
-        (fs::canonicalize(keydir), fs::canonicalize(&key_path))
+        (fs::canonicalize(keydir_path), fs::canonicalize(&key_path))
     {
         if !canonical_key_path.starts_with(&canonical_keydir) {
             return Err(EjsonError::InvalidPath(
@@ -526,14 +473,13 @@ fn read_private_key_from_disk(pubkey: &[u8; 32], keydir: &str) -> Result<String,
         }
     }
 
-    let contents = fs::read_to_string(&key_path).map_err(|_| {
+    fs::read_to_string(&key_path).map_err(|_| {
         // Don't include the full path in error messages to avoid information disclosure
         EjsonError::KeyFileError(format!(
             "key file for public key {}... not found or unreadable",
             &pubkey_hex[..8]
         ))
-    })?;
-    Ok(contents)
+    })
 }
 
 #[cfg(test)]
@@ -560,13 +506,12 @@ mod tests {
         let keydir = temp_dir.path().to_str().unwrap();
 
         // Write the private key to the keydir
-        let key_file = format!("{}/{}", keydir, pub_hex);
+        let key_file = temp_dir.path().join(&pub_hex);
         fs::write(&key_file, &priv_hex).unwrap();
 
         // Create test JSON
         let json = format!(
-            r#"{{"_public_key": "{}", "secret": "my secret value", "_comment": "not encrypted"}}"#,
-            pub_hex
+            r#"{{"_public_key": "{pub_hex}", "secret": "my secret value", "_comment": "not encrypted"}}"#
         );
 
         // Encrypt
@@ -601,20 +546,19 @@ mod tests {
         let keydir = temp_dir.path().to_str().unwrap();
 
         // Write the private key to the keydir
-        let key_file = format!("{}/{}", keydir, pub_hex);
+        let key_file = temp_dir.path().join(&pub_hex);
         fs::write(&key_file, &priv_hex).unwrap();
 
         // Create test TOML
         let toml_content = format!(
-            r#"_public_key = "{}"
+            r#"_public_key = "{pub_hex}"
 secret = "my secret value"
 _comment = "not encrypted"
 
 [database]
 password = "db_password"
 _hint = "password hint"
-"#,
-            pub_hex
+"#
         );
 
         // Encrypt
@@ -652,10 +596,9 @@ _hint = "password hint"
         // Test with .etoml extension
         let etoml_path = temp_dir.path().join("secrets.etoml");
         let toml_content = format!(
-            r#"_public_key = "{}"
+            r#"_public_key = "{pub_hex}"
 secret = "my secret"
-"#,
-            pub_hex
+"#
         );
         fs::write(&etoml_path, &toml_content).unwrap();
 
@@ -680,20 +623,19 @@ secret = "my secret"
         let keydir = temp_dir.path().to_str().unwrap();
 
         // Write the private key to the keydir
-        let key_file = format!("{}/{}", keydir, pub_hex);
+        let key_file = temp_dir.path().join(&pub_hex);
         fs::write(&key_file, &priv_hex).unwrap();
 
         // Create test YAML
         let yaml_content = format!(
-            r#"_public_key: "{}"
+            r#"_public_key: "{pub_hex}"
 secret: "my secret value"
 _comment: "not encrypted"
 
 database:
   password: "db_password"
   _hint: "password hint"
-"#,
-            pub_hex
+"#
         );
 
         // Encrypt
@@ -731,10 +673,9 @@ database:
         // Test with .eyaml extension
         let eyaml_path = temp_dir.path().join("secrets.eyaml");
         let yaml_content = format!(
-            r#"_public_key: "{}"
+            r#"_public_key: "{pub_hex}"
 secret: "my secret"
-"#,
-            pub_hex
+"#
         );
         fs::write(&eyaml_path, &yaml_content).unwrap();
 

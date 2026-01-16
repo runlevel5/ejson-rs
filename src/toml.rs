@@ -12,6 +12,9 @@ use toml_edit::{DocumentMut, Item, Value};
 /// The key name at which the public key should be stored in an ETOML document.
 pub const PUBLIC_KEY_FIELD: &str = "_public_key";
 
+/// Size of the public key in bytes.
+const KEY_SIZE: usize = 32;
+
 /// Errors that can occur during TOML processing.
 #[derive(Error, Debug)]
 pub enum TomlError {
@@ -29,7 +32,7 @@ pub enum TomlError {
 }
 
 /// Extract the _public_key value from an ETOML document.
-pub fn extract_public_key(data: &[u8]) -> Result<[u8; 32], TomlError> {
+pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], TomlError> {
     let s = String::from_utf8_lossy(data);
     let doc: toml::Value = toml::from_str(&s).map_err(|e| TomlError::InvalidToml(e.to_string()))?;
 
@@ -39,19 +42,15 @@ pub fn extract_public_key(data: &[u8]) -> Result<[u8; 32], TomlError> {
 
     let key_str = key_value.as_str().ok_or(TomlError::PublicKeyInvalid)?;
 
-    if key_str.len() != 64 {
+    if key_str.len() != KEY_SIZE * 2 {
         return Err(TomlError::PublicKeyInvalid);
     }
 
     let key_bytes = hex::decode(key_str).map_err(|_| TomlError::PublicKeyInvalid)?;
 
-    if key_bytes.len() != 32 {
-        return Err(TomlError::PublicKeyInvalid);
-    }
-
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&key_bytes);
-    Ok(key)
+    key_bytes
+        .try_into()
+        .map_err(|_| TomlError::PublicKeyInvalid)
 }
 
 /// Walker walks a TOML structure, applying an action to encryptable string values.

@@ -14,6 +14,12 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::boxed_message::{is_boxed_message, BoxedMessage};
 
+/// Size of a public or private key in bytes.
+pub const KEY_SIZE: usize = 32;
+
+/// Type alias for a 32-byte key array.
+pub type KeyBytes = [u8; KEY_SIZE];
+
 /// Errors that can occur during cryptographic operations.
 #[derive(Error, Debug)]
 pub enum CryptoError {
@@ -40,8 +46,8 @@ pub enum CryptoError {
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct Keypair {
     #[zeroize(skip)] // Public key doesn't need zeroizing
-    pub public: [u8; 32],
-    pub private: [u8; 32],
+    pub public: KeyBytes,
+    pub private: KeyBytes,
 }
 
 // Custom Debug implementation that redacts the private key
@@ -61,13 +67,13 @@ impl Keypair {
         let public_key = secret_key.public_key();
 
         Ok(Self {
-            public: public_key.as_bytes().to_owned(),
+            public: *public_key.as_bytes(),
             private: secret_key.to_bytes(),
         })
     }
 
     /// Create a keypair from existing public and private keys.
-    pub fn from_keys(public: [u8; 32], private: [u8; 32]) -> Self {
+    pub fn from_keys(public: KeyBytes, private: KeyBytes) -> Self {
         Self { public, private }
     }
 
@@ -87,7 +93,7 @@ impl Keypair {
     /// Create an Encrypter for encrypting messages to a peer's public key.
     ///
     /// This consumes the keypair to prevent multiple copies of key material.
-    pub fn into_encrypter(self, peer_public: [u8; 32]) -> Encrypter {
+    pub fn into_encrypter(self, peer_public: KeyBytes) -> Encrypter {
         Encrypter::new(self, peer_public)
     }
 
@@ -101,8 +107,8 @@ impl Keypair {
     /// Create an Encrypter while keeping the keypair (for cases where both encrypt and decrypt are needed).
     ///
     /// Security: This copies the private key material. Use sparingly.
-    pub fn encrypter(&self, peer_public: [u8; 32]) -> Encrypter {
-        let kp = Keypair::from_keys(self.public, self.private);
+    pub fn encrypter(&self, peer_public: KeyBytes) -> Encrypter {
+        let kp = Self::from_keys(self.public, self.private);
         Encrypter::new(kp, peer_public)
     }
 
@@ -110,7 +116,7 @@ impl Keypair {
     ///
     /// Security: This copies the private key material. Use sparingly.
     pub fn decrypter(&self) -> Decrypter {
-        let kp = Keypair::from_keys(self.public, self.private);
+        let kp = Self::from_keys(self.public, self.private);
         Decrypter::new(kp)
     }
 }
@@ -123,7 +129,7 @@ impl Keypair {
 pub struct Encrypter {
     keypair: Keypair,
     #[zeroize(skip)]
-    peer_public: [u8; 32],
+    peer_public: KeyBytes,
     #[zeroize(skip)] // SalsaBox handles its own cleanup
     salsa_box: SalsaBox,
 }
@@ -140,7 +146,7 @@ impl fmt::Debug for Encrypter {
 
 impl Encrypter {
     /// Create a new Encrypter with precomputed shared key.
-    pub fn new(keypair: Keypair, peer_public: [u8; 32]) -> Self {
+    pub fn new(keypair: Keypair, peer_public: KeyBytes) -> Self {
         let secret_key = SecretKey::from(keypair.private);
         let public_key = PublicKey::from(peer_public);
         let salsa_box = SalsaBox::new(&public_key, &secret_key);

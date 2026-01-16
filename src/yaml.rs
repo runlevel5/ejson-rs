@@ -12,6 +12,9 @@ use thiserror::Error;
 /// The key name at which the public key should be stored in an EYAML document.
 pub const PUBLIC_KEY_FIELD: &str = "_public_key";
 
+/// Size of the public key in bytes.
+const KEY_SIZE: usize = 32;
+
 /// Errors that can occur during YAML processing.
 #[derive(Error, Debug)]
 pub enum YamlError {
@@ -29,7 +32,7 @@ pub enum YamlError {
 }
 
 /// Extract the _public_key value from an EYAML document.
-pub fn extract_public_key(data: &[u8]) -> Result<[u8; 32], YamlError> {
+pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], YamlError> {
     let s = String::from_utf8_lossy(data);
     let doc: Value = serde_yml::from_str(&s).map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
 
@@ -39,19 +42,15 @@ pub fn extract_public_key(data: &[u8]) -> Result<[u8; 32], YamlError> {
 
     let key_str = key_value.as_str().ok_or(YamlError::PublicKeyInvalid)?;
 
-    if key_str.len() != 64 {
+    if key_str.len() != KEY_SIZE * 2 {
         return Err(YamlError::PublicKeyInvalid);
     }
 
     let key_bytes = hex::decode(key_str).map_err(|_| YamlError::PublicKeyInvalid)?;
 
-    if key_bytes.len() != 32 {
-        return Err(YamlError::PublicKeyInvalid);
-    }
-
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&key_bytes);
-    Ok(key)
+    key_bytes
+        .try_into()
+        .map_err(|_| YamlError::PublicKeyInvalid)
 }
 
 /// Walker walks a YAML structure, applying an action to encryptable string values.

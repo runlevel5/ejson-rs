@@ -4,6 +4,7 @@
 //! based on file extension.
 
 use std::ffi::OsStr;
+use std::fmt;
 use std::path::Path;
 use thiserror::Error;
 
@@ -24,6 +25,16 @@ pub enum FileFormat {
     Yaml,
     /// TOML format (.etoml, .toml)
     Toml,
+}
+
+impl fmt::Display for FileFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Json => write!(f, "JSON"),
+            Self::Yaml => write!(f, "YAML"),
+            Self::Toml => write!(f, "TOML"),
+        }
+    }
 }
 
 impl FileFormat {
@@ -143,5 +154,12 @@ mod tests {
     #[test]
     fn test_file_format_default() {
         assert_eq!(FileFormat::default(), FileFormat::Json);
+    }
+
+    #[test]
+    fn test_file_format_display() {
+        assert_eq!(format!("{}", FileFormat::Json), "JSON");
+        assert_eq!(format!("{}", FileFormat::Yaml), "YAML");
+        assert_eq!(format!("{}", FileFormat::Toml), "TOML");
     }
 }

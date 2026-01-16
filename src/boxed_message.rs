@@ -16,6 +16,12 @@ use std::fmt;
 use std::sync::LazyLock;
 use thiserror::Error;
 
+/// Size of the nonce in bytes.
+pub const NONCE_SIZE: usize = 24;
+
+/// Size of the public key in bytes.
+pub const PUBLIC_KEY_SIZE: usize = 32;
+
 /// Regex pattern for parsing boxed messages.
 static MESSAGE_PARSER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^EJ\[(\d):([A-Za-z0-9+=/]{44}):([A-Za-z0-9+=/]{32}):(.+)\]$").unwrap()
@@ -46,8 +52,8 @@ pub enum BoxedMessageError {
 #[derive(Clone)]
 pub struct BoxedMessage {
     pub schema_version: u8,
-    pub encrypter_public: [u8; 32],
-    pub nonce: [u8; 24],
+    pub encrypter_public: [u8; PUBLIC_KEY_SIZE],
+    pub nonce: [u8; NONCE_SIZE],
     pub box_data: Vec<u8>,
 }
 
@@ -101,11 +107,9 @@ impl BoxedMessage {
         let pub_bytes = BASE64
             .decode(pub_b64)
             .map_err(|_| BoxedMessageError::InvalidBase64)?;
-        if pub_bytes.len() != 32 {
-            return Err(BoxedMessageError::InvalidPublicKey);
-        }
-        let mut encrypter_public = [0u8; 32];
-        encrypter_public.copy_from_slice(&pub_bytes);
+        let encrypter_public: [u8; PUBLIC_KEY_SIZE] = pub_bytes
+            .try_into()
+            .map_err(|_| BoxedMessageError::InvalidPublicKey)?;
 
         // Decode nonce
         let nonce_b64 = captures
@@ -115,11 +119,9 @@ impl BoxedMessage {
         let nonce_bytes = BASE64
             .decode(nonce_b64)
             .map_err(|_| BoxedMessageError::InvalidBase64)?;
-        if nonce_bytes.len() != 24 {
-            return Err(BoxedMessageError::InvalidNonce);
-        }
-        let mut nonce = [0u8; 24];
-        nonce.copy_from_slice(&nonce_bytes);
+        let nonce: [u8; NONCE_SIZE] = nonce_bytes
+            .try_into()
+            .map_err(|_| BoxedMessageError::InvalidNonce)?;
 
         // Decode ciphertext
         let box_b64 = captures
