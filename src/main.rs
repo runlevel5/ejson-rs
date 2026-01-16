@@ -4,7 +4,7 @@
 
 use std::fs;
 use std::io::{self, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 use clap::{Parser, Subcommand};
@@ -94,16 +94,17 @@ fn main() {
 
 fn keygen_action(keydir: &str, write_flag: bool) -> Result<(), String> {
     let (pub_key, priv_key) =
-        ejson::generate_keypair().map_err(|e| format!("Key generation failed: {}", e))?;
+        ejson::generate_keypair().map_err(|e| format!("Key generation failed: {e}"))?;
 
     // Wrap private key in Zeroizing for automatic cleanup
     let priv_key = Zeroizing::new(priv_key);
 
     if write_flag {
-        let key_file = format!("{}/{}", keydir, pub_key);
+        let keydir_path = Path::new(keydir);
+        let key_file = keydir_path.join(&pub_key);
 
         // Ensure keydir exists
-        fs::create_dir_all(keydir).map_err(|e| format!("Failed to create keydir: {}", e))?;
+        fs::create_dir_all(keydir_path).map_err(|e| format!("Failed to create keydir: {e}"))?;
 
         // Write private key with restrictive permissions
         // Use create_new(true) to ensure atomic creation with correct permissions
@@ -113,11 +114,11 @@ fn keygen_action(keydir: &str, write_flag: bool) -> Result<(), String> {
             .create_new(true)
             .mode(0o440)
             .open(&key_file)
-            .map_err(|e| format!("Failed to write key file: {}", e))?;
+            .map_err(|e| format!("Failed to write key file: {e}"))?;
 
-        writeln!(file, "{}", *priv_key).map_err(|e| format!("Failed to write key: {}", e))?;
+        writeln!(file, "{}", *priv_key).map_err(|e| format!("Failed to write key: {e}"))?;
 
-        println!("{}", pub_key);
+        println!("{pub_key}");
     } else {
         // Print warning to stderr before displaying the private key
         eprintln!("WARNING: The private key will be displayed below.");
@@ -125,7 +126,7 @@ fn keygen_action(keydir: &str, write_flag: bool) -> Result<(), String> {
         eprintln!("         Consider using 'ejson keygen -w' to write directly to keydir.");
         eprintln!("         Terminal scrollback may retain this key.");
         eprintln!();
-        println!("Public Key:\n{}\nPrivate Key:\n{}", pub_key, *priv_key);
+        println!("Public Key:\n{pub_key}\nPrivate Key:\n{}", *priv_key);
     }
 
     Ok(())
@@ -134,17 +135,17 @@ fn keygen_action(keydir: &str, write_flag: bool) -> Result<(), String> {
 fn encrypt_action(files: &[PathBuf]) -> Result<(), String> {
     for file_path in files {
         let n = ejson::encrypt_file_in_place(file_path)
-            .map_err(|e| format!("Encryption failed: {}", e))?;
+            .map_err(|e| format!("Encryption failed: {e}"))?;
 
-        println!("Wrote {} bytes to {}.", n, file_path.display());
+        println!("Wrote {n} bytes to {}.", file_path.display());
     }
     Ok(())
 }
 
 fn decrypt_action(
-    file: &PathBuf,
+    file: &Path,
     keydir: &str,
-    output: Option<&std::path::Path>,
+    output: Option<&Path>,
     key_from_stdin: bool,
     trim_underscore_prefix: bool,
 ) -> Result<(), String> {
@@ -153,7 +154,7 @@ fn decrypt_action(
         let mut stdin_content = Zeroizing::new(String::new());
         io::stdin()
             .read_to_string(&mut stdin_content)
-            .map_err(|e| format!("Failed to read from stdin: {}", e))?;
+            .map_err(|e| format!("Failed to read from stdin: {e}"))?;
         Zeroizing::new(stdin_content.trim().to_string())
     } else {
         Zeroizing::new(String::new())
@@ -165,14 +166,14 @@ fn decrypt_action(
         &user_supplied_private_key,
         trim_underscore_prefix,
     )
-    .map_err(|e| format!("Decryption failed: {}", e))?;
+    .map_err(|e| format!("Decryption failed: {e}"))?;
 
     if let Some(out_path) = output {
         // Write decrypted output with restrictive permissions
         // Use atomic write pattern: write to temp file, then rename
         // This prevents race conditions and ensures correct permissions
 
-        let parent = out_path.parent().unwrap_or(std::path::Path::new("."));
+        let parent = out_path.parent().unwrap_or(Path::new("."));
 
         // Create a temporary file in the same directory for atomic rename
         let temp_path = parent.join(format!(".ejson_decrypt_{}.tmp", std::process::id()));
@@ -184,23 +185,23 @@ fn decrypt_action(
                 .create_new(true)
                 .mode(0o600)
                 .open(&temp_path)
-                .map_err(|e| format!("Failed to create temporary file: {}", e))?;
+                .map_err(|e| format!("Failed to create temporary file: {e}"))?;
             file.write_all(&decrypted)
-                .map_err(|e| format!("Failed to write temporary file: {}", e))?;
+                .map_err(|e| format!("Failed to write temporary file: {e}"))?;
             file.sync_all()
-                .map_err(|e| format!("Failed to sync temporary file: {}", e))?;
+                .map_err(|e| format!("Failed to sync temporary file: {e}"))?;
         }
 
         // Atomic rename to final destination
         fs::rename(&temp_path, out_path).map_err(|e| {
             // Clean up temp file on error
             let _ = fs::remove_file(&temp_path);
-            format!("Failed to rename temporary file to output: {}", e)
+            format!("Failed to rename temporary file to output: {e}")
         })?;
     } else {
         io::stdout()
             .write_all(&decrypted)
-            .map_err(|e| format!("Failed to write to stdout: {}", e))?;
+            .map_err(|e| format!("Failed to write to stdout: {e}"))?;
     }
 
     Ok(())
@@ -242,10 +243,8 @@ mod tests {
 
         // Create an encrypted ejson file
         let ejson_path = temp_dir.path().join("secrets.ejson");
-        let json_content = format!(
-            r#"{{"_public_key": "{}", "secret": "my secret value"}}"#,
-            pub_key
-        );
+        let json_content =
+            format!(r#"{{"_public_key": "{pub_key}", "secret": "my secret value"}}"#);
         fs::write(&ejson_path, &json_content).unwrap();
 
         // Encrypt the file

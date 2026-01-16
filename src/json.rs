@@ -13,6 +13,9 @@ use thiserror::Error;
 /// The key name at which the public key should be stored in an EJSON document.
 pub const PUBLIC_KEY_FIELD: &str = "_public_key";
 
+/// Size of the public key in bytes.
+const KEY_SIZE: usize = 32;
+
 /// Errors that can occur during JSON processing.
 #[derive(Error, Debug)]
 pub enum JsonError {
@@ -30,7 +33,7 @@ pub enum JsonError {
 }
 
 /// Extract the _public_key value from an EJSON document.
-pub fn extract_public_key(data: &[u8]) -> Result<[u8; 32], JsonError> {
+pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], JsonError> {
     let obj: Value = serde_json::from_slice(data).map_err(|_| JsonError::InvalidJson)?;
 
     let key_value = obj
@@ -39,19 +42,15 @@ pub fn extract_public_key(data: &[u8]) -> Result<[u8; 32], JsonError> {
 
     let key_str = key_value.as_str().ok_or(JsonError::PublicKeyInvalid)?;
 
-    if key_str.len() != 64 {
+    if key_str.len() != KEY_SIZE * 2 {
         return Err(JsonError::PublicKeyInvalid);
     }
 
     let key_bytes = hex::decode(key_str).map_err(|_| JsonError::PublicKeyInvalid)?;
 
-    if key_bytes.len() != 32 {
-        return Err(JsonError::PublicKeyInvalid);
-    }
-
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&key_bytes);
-    Ok(key)
+    key_bytes
+        .try_into()
+        .map_err(|_| JsonError::PublicKeyInvalid)
 }
 
 /// Walker walks a JSON structure, applying an action to encryptable string values.
