@@ -154,6 +154,104 @@ where
     }
 }
 
+/// Trim the first leading underscore from all keys in a TOML document.
+/// The `_public_key` field is excluded from trimming.
+pub fn trim_underscore_prefix_from_keys(data: &[u8]) -> Result<Vec<u8>, TomlError> {
+    let s = String::from_utf8_lossy(data);
+    let mut doc: DocumentMut = s
+        .parse()
+        .map_err(|e: toml_edit::TomlError| TomlError::InvalidToml(e.to_string()))?;
+
+    transform_toml_table_keys(doc.as_table_mut());
+
+    Ok(doc.to_string().into_bytes())
+}
+
+fn transform_toml_table_keys(table: &mut toml_edit::Table) {
+    // Collect keys that need to be renamed (exclude _public_key)
+    let keys_to_rename: Vec<(String, String)> = table
+        .iter()
+        .filter_map(|(k, _)| {
+            if k.starts_with('_') && k != "_public_key" {
+                Some((k.to_string(), k[1..].to_string()))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Rename keys by removing and re-inserting with new key
+    for (old_key, new_key) in keys_to_rename {
+        if let Some(item) = table.remove(&old_key) {
+            table.insert(&new_key, item);
+        }
+    }
+
+    // Recursively process nested tables
+    let keys: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
+    for key in keys {
+        if let Some(item) = table.get_mut(&key) {
+            transform_toml_item_keys(item);
+        }
+    }
+}
+
+fn transform_toml_item_keys(item: &mut Item) {
+    match item {
+        Item::Table(table) => {
+            transform_toml_table_keys(table);
+        }
+        Item::ArrayOfTables(array) => {
+            for table in array.iter_mut() {
+                transform_toml_table_keys(table);
+            }
+        }
+        Item::Value(value) => {
+            transform_toml_value_keys(value);
+        }
+        Item::None => {}
+    }
+}
+
+fn transform_toml_value_keys(value: &mut Value) {
+    match value {
+        Value::InlineTable(table) => {
+            // Collect keys that need to be renamed (exclude _public_key)
+            let keys_to_rename: Vec<(String, String)> = table
+                .iter()
+                .filter_map(|(k, _)| {
+                    if k.starts_with('_') && k != "_public_key" {
+                        Some((k.to_string(), k[1..].to_string()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Rename keys
+            for (old_key, new_key) in keys_to_rename {
+                if let Some(val) = table.remove(&old_key) {
+                    table.insert(&new_key, val);
+                }
+            }
+
+            // Recursively process nested values
+            let keys: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
+            for key in keys {
+                if let Some(inner_value) = table.get_mut(&key) {
+                    transform_toml_value_keys(inner_value);
+                }
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr.iter_mut() {
+                transform_toml_value_keys(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,5 +368,39 @@ ratio = 1.5
         assert!(result_str.contains("port = 8080"));
         assert!(result_str.contains("enabled = true"));
         assert!(result_str.contains("ratio = 1.5"));
+    }
+
+    #[test]
+    fn test_trim_underscore_prefix_from_keys() {
+        let toml = br#"_public_key = "abc123"
+_secret = "value"
+normal = "data"
+"#;
+        let result = trim_underscore_prefix_from_keys(toml).unwrap();
+        let result_str = String::from_utf8_lossy(&result);
+
+        // _public_key should NOT be trimmed
+        assert!(result_str.contains("_public_key = "));
+        // Other underscore keys should have it removed
+        assert!(result_str.contains("secret = "));
+        assert!(result_str.contains("normal = "));
+        // Should not have underscore prefix on _secret
+        assert!(!result_str.contains("_secret"));
+    }
+
+    #[test]
+    fn test_trim_underscore_prefix_nested_table() {
+        let toml = br#"[_outer]
+_inner = "value"
+normal = "data"
+"#;
+        let result = trim_underscore_prefix_from_keys(toml).unwrap();
+        let result_str = String::from_utf8_lossy(&result);
+
+        // Both nested keys should have underscore removed
+        assert!(result_str.contains("[outer]"));
+        assert!(result_str.contains("inner = "));
+        assert!(!result_str.contains("_outer"));
+        assert!(!result_str.contains("_inner"));
     }
 }
