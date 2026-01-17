@@ -2,7 +2,7 @@
 
 A Rust implementation of [Shopify/ejson](https://github.com/Shopify/ejson) — a utility for managing secrets in source control using public-key cryptography.
 
-This is a drop-in replacement for the original Go implementation, with added support for **YAML** and **TOML** file formats.
+This is a drop-in replacement for the original Go implementation, with added support for **YAML** and **TOML** file formats and strong focus on performance and security.
 
 ![demo](http://burkelibbey.s3.amazonaws.com/ejson-demo.gif)
 
