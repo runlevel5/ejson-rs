@@ -77,7 +77,7 @@ impl BoxedMessage {
         // ciphertext = plaintext + 16 bytes (Poly1305 tag)
         // base64 size = (n + 2) / 3 * 4
         let ciphertext_len = plaintext_len + 16;
-        let box_b64_len = (ciphertext_len + 2) / 3 * 4;
+        let box_b64_len = ciphertext_len.div_ceil(3) * 4;
         4 + 44 + 1 + 32 + 1 + box_b64_len + 1 // EJ[1: + pub + : + nonce + : + box + ]
     }
 
@@ -90,9 +90,9 @@ impl BoxedMessage {
         result.extend_from_slice(b"EJ[");
         result.extend_from_slice(self.schema_version.to_string().as_bytes());
         result.push(b':');
-        result.extend_from_slice(BASE64.encode(&self.encrypter_public).as_bytes());
+        result.extend_from_slice(BASE64.encode(self.encrypter_public).as_bytes());
         result.push(b':');
-        result.extend_from_slice(BASE64.encode(&self.nonce).as_bytes());
+        result.extend_from_slice(BASE64.encode(self.nonce).as_bytes());
         result.push(b':');
         result.extend_from_slice(BASE64.encode(&self.box_data).as_bytes());
         result.push(b']');
