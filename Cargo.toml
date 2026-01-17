@@ -28,7 +28,7 @@ toml_edit = "0.24"
 
 # YAML
 serde = { version = "1.0", features = ["derive"] }
-serde_yml = "0.0.12"
+serde_norway = "0.9"
 
 # Encoding
 base64 = "0.22"
