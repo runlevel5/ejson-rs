@@ -200,7 +200,16 @@ repos:
   - repo: https://github.com/runlevel5/ejson-rs
     hooks:
       - id: run-ejson-encrypt
-```
+``
+`
+## Benchmarking
+
+Comparing `ejson-rs` with the original Go `Shopify/ejson` implementation:
+
+| Metric | Result |
+|--------|--------|
+| Encryption | Rust is 1.02-1.53x faster than Go |
+| Decryption | Rust is 1.3-1.6x faster than Go  |
 
 ## See Also
 
