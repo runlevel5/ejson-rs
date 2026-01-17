@@ -18,6 +18,7 @@ pub mod crypto;
 pub mod format;
 pub mod json;
 pub mod toml;
+pub mod typed;
 pub mod yaml;
 
 use std::fs::{self, File};
@@ -28,9 +29,11 @@ use crypto::{CryptoError, Keypair};
 
 // Re-export key type for public API
 pub use crypto::KeyBytes;
+// Re-export typed API
 use format::{FileFormat, FormatError};
 use fs4::fs_std::FileExt;
 use json::JsonError;
+pub use typed::{DecryptedContent, DecryptedValue};
 
 use thiserror::Error;
 use toml::TomlError;
@@ -402,6 +405,75 @@ pub fn decrypt_file<P: AsRef<Path>>(
     Ok(output)
 }
 
+/// Decrypt a file and return the decrypted contents as a typed value.
+///
+/// This function is similar to [`decrypt_file`], but instead of returning raw bytes,
+/// it returns a [`DecryptedContent`] enum that provides format-agnostic access to
+/// the decrypted data.
+///
+/// This is particularly useful for tools like `ejson2env` that need to extract
+/// specific values from the decrypted content without knowing the file format.
+///
+/// # Example
+///
+/// ```no_run
+/// use ejson::{decrypt_file_typed, DecryptedContent};
+///
+/// let content = decrypt_file_typed("secrets.ejson", "/opt/ejson/keys", "", false)?;
+///
+/// // Access values uniformly regardless of JSON/YAML/TOML format
+/// if let Some(env) = content.get("environment") {
+///     if let Some(map) = env.as_string_map() {
+///         for (key, value) in map {
+///             if let Some(v) = value.as_str() {
+///                 println!("{}={}", key, v);
+///             }
+///         }
+///     }
+/// }
+/// # Ok::<(), ejson::EjsonError>(())
+/// ```
+pub fn decrypt_file_typed<P: AsRef<Path>>(
+    file_path: P,
+    keydir: &str,
+    user_supplied_private_key: &str,
+    trim_underscore_prefix: bool,
+) -> Result<DecryptedContent, EjsonError> {
+    let file_path = file_path.as_ref();
+    let format = FileFormat::from_path(file_path)?;
+
+    // Decrypt to bytes first
+    let decrypted_bytes = decrypt_file(
+        file_path,
+        keydir,
+        user_supplied_private_key,
+        trim_underscore_prefix,
+    )?;
+
+    // Parse based on format
+    let content = match format {
+        FileFormat::Json => {
+            let value: serde_json::Value =
+                serde_json::from_slice(&decrypted_bytes).map_err(|_| JsonError::InvalidJson)?;
+            DecryptedContent::Json(value)
+        }
+        FileFormat::Yaml => {
+            let value: serde_norway::Value = serde_norway::from_slice(&decrypted_bytes)
+                .map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
+            DecryptedContent::Yaml(value)
+        }
+        FileFormat::Toml => {
+            let s = std::str::from_utf8(&decrypted_bytes)
+                .map_err(|e| TomlError::InvalidToml(e.to_string()))?;
+            let value: ::toml::Value =
+                ::toml::from_str(s).map_err(|e| TomlError::InvalidToml(e.to_string()))?;
+            DecryptedContent::Toml(value)
+        }
+    };
+
+    Ok(content)
+}
+
 /// Trim the first leading underscore from all keys in the data.
 ///
 /// This is a post-processing step applied after decryption when the
@@ -694,5 +766,184 @@ secret: "my secret"
         let pubkey = [0u8; 32];
         let result = find_private_key(&pubkey, "/nonexistent", "deadbeef"); // Too short
         assert!(matches!(result, Err(EjsonError::InvalidPrivateKey)));
+    }
+
+    #[test]
+    fn test_decrypt_file_typed_json() {
+        // Generate a keypair
+        let kp = Keypair::generate().unwrap();
+        let pub_hex = kp.public_string();
+        let priv_hex = kp.private_string();
+
+        // Create a temporary keydir
+        let temp_dir = TempDir::new().unwrap();
+        let keydir = temp_dir.path().to_str().unwrap();
+
+        // Write the private key to the keydir
+        let key_file = temp_dir.path().join(&pub_hex);
+        fs::write(&key_file, &priv_hex).unwrap();
+
+        // Create and encrypt test JSON file
+        let json_path = temp_dir.path().join("secrets.ejson");
+        let json_content = format!(
+            r#"{{"_public_key": "{pub_hex}", "environment": {{"FOO": "bar", "BAZ": "qux"}}, "secret": "value"}}"#
+        );
+        fs::write(&json_path, &json_content).unwrap();
+        encrypt_file_in_place(&json_path).unwrap();
+
+        // Decrypt with typed API
+        let content = decrypt_file_typed(&json_path, keydir, "", false).unwrap();
+
+        // Access using unified API
+        let env = content.get("environment").expect("should have environment");
+        let foo = env.get("FOO").expect("should have FOO");
+        assert_eq!(foo.as_str(), Some("bar"));
+
+        // Iterate over environment map
+        let pairs: Vec<_> = env
+            .as_string_map()
+            .unwrap()
+            .filter_map(|(k, v)| v.as_str().map(|s| (k.to_string(), s.to_string())))
+            .collect();
+        assert_eq!(pairs.len(), 2);
+        assert!(pairs.contains(&("FOO".to_string(), "bar".to_string())));
+        assert!(pairs.contains(&("BAZ".to_string(), "qux".to_string())));
+    }
+
+    #[test]
+    fn test_decrypt_file_typed_toml() {
+        // Generate a keypair
+        let kp = Keypair::generate().unwrap();
+        let pub_hex = kp.public_string();
+        let priv_hex = kp.private_string();
+
+        // Create a temporary keydir
+        let temp_dir = TempDir::new().unwrap();
+        let keydir = temp_dir.path().to_str().unwrap();
+
+        // Write the private key to the keydir
+        let key_file = temp_dir.path().join(&pub_hex);
+        fs::write(&key_file, &priv_hex).unwrap();
+
+        // Create and encrypt test TOML file
+        let toml_path = temp_dir.path().join("secrets.etoml");
+        let toml_content = format!(
+            r#"_public_key = "{pub_hex}"
+secret = "value"
+
+[environment]
+FOO = "bar"
+BAZ = "qux"
+"#
+        );
+        fs::write(&toml_path, &toml_content).unwrap();
+        encrypt_file_in_place(&toml_path).unwrap();
+
+        // Decrypt with typed API
+        let content = decrypt_file_typed(&toml_path, keydir, "", false).unwrap();
+
+        // Access using unified API
+        let env = content.get("environment").expect("should have environment");
+        let foo = env.get("FOO").expect("should have FOO");
+        assert_eq!(foo.as_str(), Some("bar"));
+
+        // Iterate over environment map
+        let pairs: Vec<_> = env
+            .as_string_map()
+            .unwrap()
+            .filter_map(|(k, v)| v.as_str().map(|s| (k.to_string(), s.to_string())))
+            .collect();
+        assert_eq!(pairs.len(), 2);
+        assert!(pairs.contains(&("FOO".to_string(), "bar".to_string())));
+        assert!(pairs.contains(&("BAZ".to_string(), "qux".to_string())));
+    }
+
+    #[test]
+    fn test_decrypt_file_typed_yaml() {
+        // Generate a keypair
+        let kp = Keypair::generate().unwrap();
+        let pub_hex = kp.public_string();
+        let priv_hex = kp.private_string();
+
+        // Create a temporary keydir
+        let temp_dir = TempDir::new().unwrap();
+        let keydir = temp_dir.path().to_str().unwrap();
+
+        // Write the private key to the keydir
+        let key_file = temp_dir.path().join(&pub_hex);
+        fs::write(&key_file, &priv_hex).unwrap();
+
+        // Create and encrypt test YAML file
+        let yaml_path = temp_dir.path().join("secrets.eyaml");
+        let yaml_content = format!(
+            r#"_public_key: "{pub_hex}"
+secret: "value"
+
+environment:
+  FOO: "bar"
+  BAZ: "qux"
+"#
+        );
+        fs::write(&yaml_path, &yaml_content).unwrap();
+        encrypt_file_in_place(&yaml_path).unwrap();
+
+        // Decrypt with typed API
+        let content = decrypt_file_typed(&yaml_path, keydir, "", false).unwrap();
+
+        // Access using unified API
+        let env = content.get("environment").expect("should have environment");
+        let foo = env.get("FOO").expect("should have FOO");
+        assert_eq!(foo.as_str(), Some("bar"));
+
+        // Iterate over environment map
+        let pairs: Vec<_> = env
+            .as_string_map()
+            .unwrap()
+            .filter_map(|(k, v)| v.as_str().map(|s| (k.to_string(), s.to_string())))
+            .collect();
+        assert_eq!(pairs.len(), 2);
+        assert!(pairs.contains(&("FOO".to_string(), "bar".to_string())));
+        assert!(pairs.contains(&("BAZ".to_string(), "qux".to_string())));
+    }
+
+    #[test]
+    fn test_decrypt_file_typed_ejson2env_pattern() {
+        // This test demonstrates the simplified ejson2env pattern
+        let kp = Keypair::generate().unwrap();
+        let pub_hex = kp.public_string();
+        let priv_hex = kp.private_string();
+
+        let temp_dir = TempDir::new().unwrap();
+        let keydir = temp_dir.path().to_str().unwrap();
+        let key_file = temp_dir.path().join(&pub_hex);
+        fs::write(&key_file, &priv_hex).unwrap();
+
+        // Test with JSON
+        let json_path = temp_dir.path().join("secrets.ejson");
+        let json_content = format!(
+            r#"{{"_public_key": "{pub_hex}", "environment": {{"DATABASE_URL": "postgres://localhost", "API_KEY": "secret123"}}}}"#
+        );
+        fs::write(&json_path, &json_content).unwrap();
+        encrypt_file_in_place(&json_path).unwrap();
+
+        // Simulate ejson2env extraction
+        let content = decrypt_file_typed(&json_path, keydir, "", false).unwrap();
+
+        // The pattern that ejson2env would use
+        let env_secrets: std::collections::HashMap<String, String> = content
+            .get("environment")
+            .and_then(|env| env.as_string_map())
+            .map(|map| {
+                map.filter_map(|(k, v)| v.as_str().map(|s| (k.to_string(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        assert_eq!(env_secrets.len(), 2);
+        assert_eq!(
+            env_secrets.get("DATABASE_URL"),
+            Some(&"postgres://localhost".to_string())
+        );
+        assert_eq!(env_secrets.get("API_KEY"), Some(&"secret123".to_string()));
     }
 }
