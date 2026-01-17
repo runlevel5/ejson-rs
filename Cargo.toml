@@ -12,7 +12,7 @@ categories = ["cryptography", "command-line-utilities"]
 [dependencies]
 # Cryptography
 crypto_box = "0.9"
-rand = "0.8"
+rand = "0.9"
 zeroize = { version = "1.8", features = ["derive"] }
 subtle = "2.6"
 
@@ -42,7 +42,7 @@ anyhow = "1.0"
 regex = "1.12"
 
 # File locking
-fs4 = "0.12"
+fs4 = "0.13"
 
 [dev-dependencies]
 tempfile = "3.24"
