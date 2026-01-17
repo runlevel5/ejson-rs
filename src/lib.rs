@@ -31,7 +31,7 @@ pub use crypto::KeyBytes;
 use format::{FileFormat, FormatError};
 use fs4::fs_std::FileExt;
 use json::JsonError;
-use subtle::ConstantTimeEq;
+
 use thiserror::Error;
 use toml::TomlError;
 use yaml::YamlError;
@@ -432,13 +432,7 @@ fn find_private_key(
     // Decode hex - the intermediate Vec will be small and short-lived
     let mut privkey_bytes = Zeroizing::new(hex::decode(privkey_string.trim())?);
 
-    // Use constant-time comparison for key length to avoid timing attacks
-    // (though this is minimal risk since we're comparing against a constant)
-    let expected_len = 32u8;
-    let actual_len = privkey_bytes.len() as u8;
-    let len_ok = actual_len.ct_eq(&expected_len);
-
-    if !bool::from(len_ok) {
+    if privkey_bytes.len() != 32 {
         return Err(EjsonError::InvalidPrivateKey);
     }
 
