@@ -8,6 +8,8 @@ use crypto_box::{
     aead::{Aead, AeadCore, OsRng},
     PublicKey, SalsaBox, SecretKey,
 };
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt;
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -190,10 +192,24 @@ impl Encrypter {
 
 /// Decrypter decrypts messages using NaCl Box.
 ///
+/// This implementation caches the precomputed shared key (SalsaBox) for each
+/// unique encrypter public key, significantly improving performance when
+/// decrypting multiple messages from the same encrypter (which is the common
+/// case in ejson files where all values are encrypted with the same ephemeral key).
+///
 /// Security: Key material is automatically zeroized when dropped.
-#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct Decrypter {
     keypair: Keypair,
+    /// Cache of SalsaBox instances keyed by encrypter public key.
+    /// Uses RefCell for interior mutability since decrypt takes &self.
+    cache: RefCell<HashMap<KeyBytes, SalsaBox>>,
+}
+
+// Manual Zeroize implementation since we can't derive it with RefCell
+impl Drop for Decrypter {
+    fn drop(&mut self) {
+        self.keypair.private.zeroize();
+    }
 }
 
 // Custom Debug implementation that redacts sensitive data
@@ -201,6 +217,7 @@ impl fmt::Debug for Decrypter {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Decrypter")
             .field("keypair", &"[REDACTED]")
+            .field("cached_keys", &self.cache.borrow().len())
             .finish()
     }
 }
@@ -208,7 +225,10 @@ impl fmt::Debug for Decrypter {
 impl Decrypter {
     /// Create a new Decrypter from a keypair.
     pub fn new(keypair: Keypair) -> Self {
-        Self { keypair }
+        Self {
+            keypair,
+            cache: RefCell::new(HashMap::new()),
+        }
     }
 
     /// Decrypt a message in boxed message format.
@@ -218,11 +238,17 @@ impl Decrypter {
     }
 
     fn decrypt_boxed(&self, boxed: &BoxedMessage) -> Result<Vec<u8>, CryptoError> {
-        let secret_key = SecretKey::from(self.keypair.private);
-        let peer_public = PublicKey::from(boxed.encrypter_public);
-        let salsa_box = SalsaBox::new(&peer_public, &secret_key);
-
         let nonce = boxed.nonce.into();
+
+        // Check if we have a cached SalsaBox for this encrypter
+        let mut cache = self.cache.borrow_mut();
+
+        let salsa_box = cache.entry(boxed.encrypter_public).or_insert_with(|| {
+            let secret_key = SecretKey::from(self.keypair.private);
+            let peer_public = PublicKey::from(boxed.encrypter_public);
+            SalsaBox::new(&peer_public, &secret_key)
+        });
+
         salsa_box
             .decrypt(&nonce, boxed.box_data.as_slice())
             .map_err(|_| CryptoError::DecryptionFailed)
