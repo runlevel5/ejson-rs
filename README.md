@@ -195,8 +195,9 @@ Comparing `ejson-rs` with the original Go `Shopify/ejson` implementation:
 
 | Metric | Result |
 |--------|--------|
+| Keygen     | Rust is 1.03-1.35x faster than Go |
 | Encryption | Rust is 1.02-1.53x faster than Go |
-| Decryption | Rust is 1.3-1.6x faster than Go  |
+| Decryption | Rust is 1.3-1.6x faster than Go   |
 
 
 ## pre-commit hook
