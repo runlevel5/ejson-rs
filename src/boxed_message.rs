@@ -70,17 +70,34 @@ impl fmt::Debug for BoxedMessage {
 }
 
 impl BoxedMessage {
+    /// Estimate the serialized size of a boxed message.
+    /// Useful for pre-allocating buffers.
+    pub fn estimate_size(plaintext_len: usize) -> usize {
+        // EJ[1: + base64(32) + : + base64(24) + : + base64(ciphertext) + ]
+        // ciphertext = plaintext + 16 bytes (Poly1305 tag)
+        // base64 size = (n + 2) / 3 * 4
+        let ciphertext_len = plaintext_len + 16;
+        let box_b64_len = (ciphertext_len + 2) / 3 * 4;
+        4 + 44 + 1 + 32 + 1 + box_b64_len + 1 // EJ[1: + pub + : + nonce + : + box + ]
+    }
+
     /// Serialize the boxed message to wire format.
     pub fn dump(&self) -> Vec<u8> {
-        let pub_b64 = BASE64.encode(self.encrypter_public);
-        let nonce_b64 = BASE64.encode(self.nonce);
-        let box_b64 = BASE64.encode(&self.box_data);
+        // Pre-allocate with estimated size
+        let estimated_size = Self::estimate_size(self.box_data.len());
+        let mut result = Vec::with_capacity(estimated_size);
 
-        format!(
-            "EJ[{}:{}:{}:{}]",
-            self.schema_version, pub_b64, nonce_b64, box_b64
-        )
-        .into_bytes()
+        result.extend_from_slice(b"EJ[");
+        result.extend_from_slice(self.schema_version.to_string().as_bytes());
+        result.push(b':');
+        result.extend_from_slice(BASE64.encode(&self.encrypter_public).as_bytes());
+        result.push(b':');
+        result.extend_from_slice(BASE64.encode(&self.nonce).as_bytes());
+        result.push(b':');
+        result.extend_from_slice(BASE64.encode(&self.box_data).as_bytes());
+        result.push(b']');
+
+        result
     }
 
     /// Parse a boxed message from wire format.
@@ -142,7 +159,13 @@ impl BoxedMessage {
 }
 
 /// Check if data is in boxed message format.
+/// Uses a fast prefix check instead of full regex matching.
 pub fn is_boxed_message(data: &[u8]) -> bool {
+    // Fast path: check prefix first
+    if !data.starts_with(b"EJ[") {
+        return false;
+    }
+    // Only run full regex validation if prefix matches
     if let Ok(s) = std::str::from_utf8(data) {
         MESSAGE_PARSER.is_match(s)
     } else {
