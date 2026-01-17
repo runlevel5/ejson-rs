@@ -1,6 +1,6 @@
 [package]
 name = "ejson"
-version = "0.0.10"
+version = "0.0.11"
 edition = "2021"
 authors = ["Trung Lê <8@tle.id.au>"]
 description = "Manage encrypted secrets using public key encryption"
@@ -12,7 +12,7 @@ categories = ["cryptography", "command-line-utilities"]
 [dependencies]
 # Cryptography
 crypto_box = "0.9"
-rand = "0.8"
+rand = "0.9"
 zeroize = { version = "1.8", features = ["derive"] }
 subtle = "2.6"
 
@@ -28,7 +28,7 @@ toml_edit = "0.24"
 
 # YAML
 serde = { version = "1.0", features = ["derive"] }
-serde_yml = "0.0.12"
+serde_norway = "0.9"
 
 # Encoding
 base64 = "0.22"
@@ -42,7 +42,7 @@ anyhow = "1.0"
 regex = "1.12"
 
 # File locking
-fs4 = "0.12"
+fs4 = "0.13"
 
 [dev-dependencies]
 tempfile = "3.24"
