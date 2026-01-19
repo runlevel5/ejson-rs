@@ -17,6 +17,7 @@ pub mod boxed_message;
 pub mod crypto;
 pub mod env;
 pub mod format;
+pub mod handler;
 pub mod json;
 pub mod toml;
 pub mod typed;
@@ -32,8 +33,10 @@ use crypto::{CryptoError, Keypair};
 pub use crypto::KeyBytes;
 // Re-export typed API
 pub use format::FileFormat;
-use format::FormatError;
+// Re-export handler trait for implementing custom formats
+use format::FileFormatError;
 use fs4::fs_std::FileExt;
+pub use handler::{FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD};
 use json::JsonError;
 pub use typed::{DecryptedContent, DecryptedValue};
 
@@ -63,6 +66,9 @@ pub enum EjsonError {
 
     #[error("format error: {0}")]
     Format(#[from] FormatError),
+
+    #[error("file format error: {0}")]
+    FileFormat(#[from] FileFormatError),
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -189,45 +195,24 @@ fn encrypt_data<W: Write>(
     output: &mut W,
     format: FileFormat,
 ) -> Result<usize, EjsonError> {
+    // Get the appropriate handler for this format
+    let handler = format.handler();
+
+    // Preprocess the data (e.g., collapse multiline strings for JSON)
+    let data = handler.preprocess(data)?;
+
+    // Extract the public key
+    let pubkey = handler.extract_public_key(&data)?;
+
     // Generate ephemeral keypair for this encryption session
     let my_kp = Keypair::generate()?;
+    let encrypter = my_kp.encrypter(pubkey);
 
-    // Helper closure to perform encryption
-    let do_encrypt = |pubkey: KeyBytes, data: &[u8]| -> Result<Vec<u8>, EjsonError> {
-        let encrypter = my_kp.encrypter(pubkey);
-        let encrypt_fn = |plaintext: &[u8]| encrypter.encrypt(plaintext).map_err(|e| e.to_string());
+    // Create encryption closure
+    let encrypt_fn = |plaintext: &[u8]| encrypter.encrypt(plaintext).map_err(|e| e.to_string());
 
-        match format {
-            FileFormat::Json => {
-                let walker = json::Walker::new(encrypt_fn);
-                Ok(walker.walk(data)?)
-            }
-            FileFormat::Toml => {
-                let walker = toml::Walker::new(encrypt_fn);
-                Ok(walker.walk(data)?)
-            }
-            FileFormat::Yaml => {
-                let walker = yaml::Walker::new(encrypt_fn);
-                Ok(walker.walk(data)?)
-            }
-        }
-    };
-
-    let new_data = match format {
-        FileFormat::Json => {
-            let data = json::collapse_multiline_string_literals(data)?;
-            let pubkey = json::extract_public_key(&data)?;
-            do_encrypt(pubkey, &data)?
-        }
-        FileFormat::Toml => {
-            let pubkey = toml::extract_public_key(data)?;
-            do_encrypt(pubkey, data)?
-        }
-        FileFormat::Yaml => {
-            let pubkey = yaml::extract_public_key(data)?;
-            do_encrypt(pubkey, data)?
-        }
-    };
+    // Walk and encrypt
+    let new_data = handler.walk(&data, &encrypt_fn)?;
 
     output.write_all(&new_data)?;
     Ok(new_data.len())
@@ -339,12 +324,11 @@ fn decrypt_data<W: Write>(
     user_supplied_private_key: &str,
     format: FileFormat,
 ) -> Result<(), EjsonError> {
-    // Extract public key based on format
-    let pubkey = match format {
-        FileFormat::Json => json::extract_public_key(data)?,
-        FileFormat::Toml => toml::extract_public_key(data)?,
-        FileFormat::Yaml => yaml::extract_public_key(data)?,
-    };
+    // Get the appropriate handler for this format
+    let handler = format.handler();
+
+    // Extract public key using the handler
+    let pubkey = handler.extract_public_key(data)?;
 
     // Find the private key and create decrypter
     let privkey = find_private_key(&pubkey, keydir, user_supplied_private_key)?;
@@ -360,12 +344,8 @@ fn decrypt_data<W: Write>(
         }
     };
 
-    // Walk and decrypt based on format
-    let new_data = match format {
-        FileFormat::Json => json::Walker::new(decrypt_fn).walk(data)?,
-        FileFormat::Toml => toml::Walker::new(decrypt_fn).walk(data)?,
-        FileFormat::Yaml => yaml::Walker::new(decrypt_fn).walk(data)?,
-    };
+    // Walk and decrypt using the handler
+    let new_data = handler.walk(data, &decrypt_fn)?;
 
     output.write_all(&new_data)?;
     Ok(())
@@ -559,11 +539,8 @@ fn trim_underscore_prefix_from_keys(
     data: &[u8],
     format: FileFormat,
 ) -> Result<Vec<u8>, EjsonError> {
-    match format {
-        FileFormat::Json => Ok(json::trim_underscore_prefix_from_keys(data)?),
-        FileFormat::Toml => Ok(toml::trim_underscore_prefix_from_keys(data)?),
-        FileFormat::Yaml => Ok(yaml::trim_underscore_prefix_from_keys(data)?),
-    }
+    let handler = format.handler();
+    Ok(handler.trim_underscore_prefix_from_keys(data)?)
 }
 
 fn find_private_key(

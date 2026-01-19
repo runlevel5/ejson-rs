@@ -6,14 +6,9 @@
 //!
 //! The walker uses `toml_edit` to preserve formatting and comments.
 
+use crate::handler::{FormatError, FormatHandler, WalkAction, KEY_SIZE, PUBLIC_KEY_FIELD};
 use thiserror::Error;
 use toml_edit::{DocumentMut, Item, Value};
-
-/// The key name at which the public key should be stored in an ETOML document.
-pub const PUBLIC_KEY_FIELD: &str = "_public_key";
-
-/// Size of the public key in bytes.
-const KEY_SIZE: usize = 32;
 
 /// Errors that can occur during TOML processing.
 #[derive(Error, Debug)]
@@ -248,6 +243,56 @@ fn transform_toml_value_keys(value: &mut Value) {
             }
         }
         _ => {}
+    }
+}
+
+// ============================================================================
+// FormatHandler trait implementation
+// ============================================================================
+
+/// Convert TomlError to the unified FormatError.
+impl From<TomlError> for FormatError {
+    fn from(err: TomlError) -> Self {
+        match err {
+            TomlError::PublicKeyMissing => FormatError::PublicKeyMissing,
+            TomlError::PublicKeyInvalid => FormatError::PublicKeyInvalid,
+            TomlError::InvalidToml(msg) => FormatError::InvalidSyntax {
+                format: "TOML",
+                message: msg,
+            },
+            TomlError::ActionFailed(msg) => FormatError::ActionFailed(msg),
+        }
+    }
+}
+
+/// TOML format handler implementing the FormatHandler trait.
+///
+/// This handler uses `toml_edit` to preserve formatting and comments.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TomlHandler;
+
+impl TomlHandler {
+    /// Create a new TOML format handler.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl FormatHandler for TomlHandler {
+    fn format_name(&self) -> &'static str {
+        "TOML"
+    }
+
+    fn extract_public_key(&self, data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError> {
+        extract_public_key(data).map_err(Into::into)
+    }
+
+    fn walk(&self, data: &[u8], action: WalkAction<'_>) -> Result<Vec<u8>, FormatError> {
+        Walker::new(action).walk(data).map_err(Into::into)
+    }
+
+    fn trim_underscore_prefix_from_keys(&self, data: &[u8]) -> Result<Vec<u8>, FormatError> {
+        trim_underscore_prefix_from_keys(data).map_err(Into::into)
     }
 }
 

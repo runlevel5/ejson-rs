@@ -1,16 +1,21 @@
 //! File format detection for ejson files.
 //!
 //! This module provides functionality to detect whether a file is in JSON, TOML, or YAML format
-//! based on file extension.
+//! based on file extension, and to get the appropriate handler for a format.
 
 use std::ffi::OsStr;
 use std::fmt;
 use std::path::Path;
 use thiserror::Error;
 
+use crate::handler::FormatHandler;
+use crate::json::JsonHandler;
+use crate::toml::TomlHandler;
+use crate::yaml::YamlHandler;
+
 /// Errors that can occur during file format detection.
 #[derive(Error, Debug)]
-pub enum FormatError {
+pub enum FileFormatError {
     #[error("unsupported file extension: {0}")]
     UnsupportedFileExtension(String),
 }
@@ -41,13 +46,15 @@ impl FileFormat {
     /// Detect the file format from a file path based on extension.
     ///
     /// Returns an error if the extension is not recognized or missing.
-    pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Self, FormatError> {
+    pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Self, FileFormatError> {
         match path.as_ref().extension().and_then(OsStr::to_str) {
             Some("eyaml") | Some("eyml") | Some("yaml") | Some("yml") => Ok(FileFormat::Yaml),
             Some("ejson") | Some("json") => Ok(FileFormat::Json),
             Some("etoml") | Some("toml") => Ok(FileFormat::Toml),
-            Some(ext) => Err(FormatError::UnsupportedFileExtension(ext.to_string())),
-            None => Err(FormatError::UnsupportedFileExtension("(none)".to_string())),
+            Some(ext) => Err(FileFormatError::UnsupportedFileExtension(ext.to_string())),
+            None => Err(FileFormatError::UnsupportedFileExtension(
+                "(none)".to_string(),
+            )),
         }
     }
 
@@ -57,6 +64,18 @@ impl FileFormat {
             FileFormat::Json => "ejson",
             FileFormat::Yaml => "eyaml",
             FileFormat::Toml => "etoml",
+        }
+    }
+
+    /// Get a format handler for this format.
+    ///
+    /// This returns a boxed trait object that can handle encryption/decryption
+    /// operations for the format.
+    pub fn handler(&self) -> Box<dyn FormatHandler> {
+        match self {
+            FileFormat::Json => Box::new(JsonHandler::new()),
+            FileFormat::Yaml => Box::new(YamlHandler::new()),
+            FileFormat::Toml => Box::new(TomlHandler::new()),
         }
     }
 }
@@ -129,19 +148,19 @@ mod tests {
     #[test]
     fn test_from_path_unsupported_extension() {
         let err = FileFormat::from_path("file.txt").unwrap_err();
-        assert!(matches!(err, FormatError::UnsupportedFileExtension(ext) if ext == "txt"));
+        assert!(matches!(err, FileFormatError::UnsupportedFileExtension(ext) if ext == "txt"));
 
         let err = FileFormat::from_path("file.xml").unwrap_err();
-        assert!(matches!(err, FormatError::UnsupportedFileExtension(ext) if ext == "xml"));
+        assert!(matches!(err, FileFormatError::UnsupportedFileExtension(ext) if ext == "xml"));
     }
 
     #[test]
     fn test_from_path_no_extension() {
         let err = FileFormat::from_path("file").unwrap_err();
-        assert!(matches!(err, FormatError::UnsupportedFileExtension(ext) if ext == "(none)"));
+        assert!(matches!(err, FileFormatError::UnsupportedFileExtension(ext) if ext == "(none)"));
 
         let err = FileFormat::from_path("path/to/file").unwrap_err();
-        assert!(matches!(err, FormatError::UnsupportedFileExtension(ext) if ext == "(none)"));
+        assert!(matches!(err, FileFormatError::UnsupportedFileExtension(ext) if ext == "(none)"));
     }
 
     #[test]
