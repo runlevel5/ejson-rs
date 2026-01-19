@@ -10,6 +10,7 @@ homepage = "https://github.com/runlevel5/ejson-rs"
 keywords = ["encryption", "secrets", "json", "toml", "yaml"]
 categories = ["cryptography", "command-line-utilities"]
 readme = "README.md"
+exclude = ["/.github", "/benches"]
 
 [dependencies]
 # Cryptography
