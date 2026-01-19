@@ -7,14 +7,9 @@
 //! The walker uses a scanner-based approach instead of parsing and re-serializing
 //! to preserve key ordering and make diffs meaningful over time.
 
+use crate::handler::{FormatError, FormatHandler, WalkAction, KEY_SIZE, PUBLIC_KEY_FIELD};
 use serde_json::Value;
 use thiserror::Error;
-
-/// The key name at which the public key should be stored in an EJSON document.
-pub const PUBLIC_KEY_FIELD: &str = "_public_key";
-
-/// Size of the public key in bytes.
-const KEY_SIZE: usize = 32;
 
 /// Errors that can occur during JSON processing.
 #[derive(Error, Debug)]
@@ -851,6 +846,61 @@ pub fn collapse_multiline_string_literals(data: &[u8]) -> Result<Vec<u8>, JsonEr
     }
 
     Ok(result)
+}
+
+// ============================================================================
+// FormatHandler trait implementation
+// ============================================================================
+
+/// Convert JsonError to the unified FormatError.
+impl From<JsonError> for FormatError {
+    fn from(err: JsonError) -> Self {
+        match err {
+            JsonError::PublicKeyMissing => FormatError::PublicKeyMissing,
+            JsonError::PublicKeyInvalid => FormatError::PublicKeyInvalid,
+            JsonError::InvalidJson => FormatError::InvalidSyntax {
+                format: "JSON",
+                message: "invalid JSON syntax".to_string(),
+            },
+            JsonError::ActionFailed(msg) => FormatError::ActionFailed(msg),
+        }
+    }
+}
+
+/// JSON format handler implementing the FormatHandler trait.
+///
+/// This handler uses a scanner-based approach to preserve formatting
+/// and key ordering in the output.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct JsonHandler;
+
+impl JsonHandler {
+    /// Create a new JSON format handler.
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl FormatHandler for JsonHandler {
+    fn format_name(&self) -> &'static str {
+        "JSON"
+    }
+
+    fn extract_public_key(&self, data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError> {
+        extract_public_key(data).map_err(Into::into)
+    }
+
+    fn walk(&self, data: &[u8], action: WalkAction<'_>) -> Result<Vec<u8>, FormatError> {
+        Walker::new(action).walk(data).map_err(Into::into)
+    }
+
+    fn trim_underscore_prefix_from_keys(&self, data: &[u8]) -> Result<Vec<u8>, FormatError> {
+        trim_underscore_prefix_from_keys(data).map_err(Into::into)
+    }
+
+    fn preprocess(&self, data: &[u8]) -> Result<Vec<u8>, FormatError> {
+        collapse_multiline_string_literals(data).map_err(Into::into)
+    }
 }
 
 #[cfg(test)]
