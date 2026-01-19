@@ -1,0 +1,234 @@
+.TH EJSON-DECRYPT 1 "January 2026" "ejson" "User Commands"
+.SH NAME
+ejson-decrypt \- decrypt secrets in EJSON, ETOML, or EYAML files
+.SH SYNOPSIS
+.B ejson decrypt
+[\fB\-k\fR \fIkeydir\fR | \fB\-\-keydir\fR=\fIkeydir\fR]
+[\fB\-o\fR \fIoutput\fR]
+[\fB\-\-key\-from\-stdin\fR]
+[\fB\-\-trim\-underscore\-prefix\fR]
+.I file
+.SH DESCRIPTION
+.B ejson decrypt
+decrypts an encrypted secrets file and outputs the decrypted content. By
+default, the decrypted content is written to stdout.
+.PP
+The decryption uses the private key corresponding to the public key embedded
+in the file's
+.B _public_key
+field. The private key must be available either in the keydir (a file named
+after the public key containing the private key) or provided via stdin using
+the
+.B \-\-key\-from\-stdin
+option.
+.PP
+Encrypted values (those starting with
+.BR "EJ[" )
+are decrypted and replaced with their plaintext values. Unencrypted values
+(including those under underscore-prefixed keys) are passed through unchanged.
+.SH OPTIONS
+.TP
+.BR \-k ", " \-\-keydir =\fIpath\fR
+Directory containing private keys. Defaults to
+.IR /opt/ejson/keys .
+Can also be set via the
+.B EJSON_KEYDIR
+environment variable. The command-line option takes precedence.
+.TP
+.BI \-o " output"
+Write the decrypted output to the specified file instead of stdout. The
+output file is created with restrictive permissions (0600) to prevent
+unauthorized access to the decrypted secrets.
+.TP
+.B \-\-key\-from\-stdin
+Read the private key from standard input instead of looking it up in the
+keydir. This is useful for environments where the private key is stored
+in a secrets manager or passed via a secure channel. The key should be
+provided as a 64-character hex-encoded string.
+.TP
+.B \-\-trim\-underscore\-prefix
+Strip the first leading underscore from keys in the decrypted output. This
+transforms keys like
+.I _database_username
+to
+.IR database_username ,
+while preserving the
+.B _public_key
+field. Keys with multiple leading underscores have only one underscore
+removed (e.g.,
+.I __key
+becomes
+.IR _key ).
+.SH FILE FORMAT
+Format detection is automatic based on file extension:
+.TP
+.B JSON
+Extensions:
+.IR .ejson ", " .json
+.TP
+.B TOML
+Extensions:
+.IR .etoml ", " .toml
+.TP
+.B YAML
+Extensions:
+.IR .eyaml ", " .eyml ", " .yaml ", " .yml
+.SH ENVIRONMENT
+.TP
+.B EJSON_KEYDIR
+Directory containing private keys. Defaults to
+.IR /opt/ejson/keys .
+Can be overridden by the
+.B \-\-keydir
+option.
+.SH EXAMPLES
+.PP
+Decrypt a file to stdout:
+.RS
+.nf
+$ ejson decrypt secrets.ejson
+{
+  "_public_key": "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f",
+  "_database_username": "admin",
+  "database_password": "supersecret123"
+}
+.fi
+.RE
+.PP
+Decrypt to a file:
+.RS
+.nf
+$ ejson decrypt -o decrypted.json secrets.ejson
+$ cat decrypted.json
+{
+  "_public_key": "63ccf05a...",
+  "database_password": "supersecret123"
+}
+.fi
+.RE
+.PP
+Decrypt with a custom keydir:
+.RS
+.nf
+$ ejson decrypt -k /etc/myapp/keys secrets.ejson
+.fi
+.RE
+.PP
+Decrypt using a private key from stdin (useful with secrets managers):
+.RS
+.nf
+$ vault read -field=private_key secret/ejson | ejson decrypt --key-from-stdin secrets.ejson
+.fi
+.RE
+.PP
+Decrypt and trim underscore prefixes from keys:
+.RS
+.nf
+$ ejson decrypt --trim-underscore-prefix secrets.ejson
+{
+  "_public_key": "63ccf05a...",
+  "database_username": "admin",
+  "database_password": "supersecret123"
+}
+.fi
+.RE
+.PP
+Decrypt and pipe to another command:
+.RS
+.nf
+$ ejson decrypt secrets.ejson | jq '.database_password'
+"supersecret123"
+.fi
+.RE
+.PP
+Decrypt a YAML file:
+.RS
+.nf
+$ ejson decrypt config.eyaml
+_public_key: "63ccf05a..."
+database_username: admin
+database_password: supersecret123
+.fi
+.RE
+.PP
+Decrypt a TOML file:
+.RS
+.nf
+$ ejson decrypt config.etoml
+_public_key = "63ccf05a..."
+database_username = "admin"
+database_password = "supersecret123"
+.fi
+.RE
+.SH EXIT STATUS
+.TP
+.B 0
+Success. The file was decrypted successfully.
+.TP
+.B 1
+An error occurred (file not found, invalid format, missing private key,
+decryption failed, etc.).
+.SH SECURITY CONSIDERATIONS
+.IP \(bu 2
+Decryption uses NaCl Box (Curve25519 + Salsa20 + Poly1305-AES) for
+authenticated public-key decryption.
+.IP \(bu 2
+When using
+.BR \-o ,
+the output file is created with restrictive permissions (0600) ensuring
+only the owner can read and write the file.
+.IP \(bu 2
+The decryption process uses secure memory handling with automatic
+zeroization of sensitive data (private keys) after use.
+.IP \(bu 2
+When writing to an output file, an atomic write pattern is used (write to
+temporary file, then rename) to prevent race conditions and partial writes.
+.IP \(bu 2
+Maximum file size is limited to 10 MB to prevent denial of service through
+memory exhaustion.
+.IP \(bu 2
+Avoid passing private keys via command-line arguments as they may be visible
+in process listings. Use
+.B \-\-key\-from\-stdin
+instead for secure key handling.
+.IP \(bu 2
+Be cautious when decrypting to stdout in shared environments, as the output
+may be captured in terminal scrollback or logs.
+.IP \(bu 2
+Path traversal attacks are prevented through validation (no device files,
+FIFOs, or sockets are allowed).
+.SH TIPS
+.IP \(bu 2
+Use
+.B \-\-key\-from\-stdin
+when integrating with secrets managers like HashiCorp Vault, AWS Secrets
+Manager, or similar tools.
+.IP \(bu 2
+Decrypt to a file with
+.B \-o
+when you need the decrypted content to persist, ensuring proper file
+permissions are automatically set.
+.IP \(bu 2
+Pipe the decrypted output to
+.BR jq (1)
+or
+.BR yq (1)
+for extracting specific values.
+.IP \(bu 2
+Use
+.B \-\-trim\-underscore\-prefix
+when consuming decrypted secrets in systems that don't expect
+underscore-prefixed keys.
+.IP \(bu 2
+In shell scripts, use command substitution to avoid writing secrets to disk:
+.RS
+.nf
+DB_PASS=$(ejson decrypt secrets.ejson | jq -r '.database_password')
+.fi
+.RE
+.SH SEE ALSO
+.BR ejson (1),
+.BR ejson (5),
+.BR ejson\-encrypt (1),
+.BR ejson\-keygen (1),
+.BR ejson\-env (1)
