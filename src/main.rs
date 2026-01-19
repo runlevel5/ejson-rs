@@ -15,16 +15,6 @@ use zeroize::Zeroizing;
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    /// Directory containing EJSON keys
-    #[arg(
-        short = 'k',
-        long = "keydir",
-        default_value = "/opt/ejson/keys",
-        env = "EJSON_KEYDIR",
-        global = true
-    )]
-    keydir: String,
-
     #[command(subcommand)]
     command: Commands,
 }
@@ -34,6 +24,15 @@ enum Commands {
     /// Generate a new EJSON keypair
     #[command(alias = "g")]
     Keygen {
+        /// Directory containing EJSON keys
+        #[arg(
+            short = 'k',
+            long = "keydir",
+            default_value = "/opt/ejson/keys",
+            env = "EJSON_KEYDIR"
+        )]
+        keydir: String,
+
         /// Write private key to keydir, print only public key
         #[arg(short = 'w', long = "write")]
         write: bool,
@@ -50,6 +49,15 @@ enum Commands {
     /// Decrypt an EJSON/ETOML/EYAML file
     #[command(alias = "d")]
     Decrypt {
+        /// Directory containing EJSON keys
+        #[arg(
+            short = 'k',
+            long = "keydir",
+            default_value = "/opt/ejson/keys",
+            env = "EJSON_KEYDIR"
+        )]
+        keydir: String,
+
         /// File to decrypt (format detected by extension: .ejson/.json, .etoml/.toml, or .eyaml/.eyml/.yaml/.yml)
         file: PathBuf,
 
@@ -68,6 +76,15 @@ enum Commands {
 
     /// Export environment variables from the 'environment' key in an EJSON/ETOML/EYAML file
     Env {
+        /// Directory containing EJSON keys
+        #[arg(
+            short = 'k',
+            long = "keydir",
+            default_value = "/opt/ejson/keys",
+            env = "EJSON_KEYDIR"
+        )]
+        keydir: String,
+
         /// File to read (format detected by extension: .ejson/.json, .etoml/.toml, or .eyaml/.eyml/.yaml/.yml)
         file: PathBuf,
 
@@ -90,28 +107,30 @@ fn main() {
     let cli = Cli::parse();
 
     let result = match cli.command {
-        Commands::Keygen { write } => keygen_action(&cli.keydir, write),
+        Commands::Keygen { keydir, write } => keygen_action(&keydir, write),
         Commands::Encrypt { files } => encrypt_action(&files),
         Commands::Decrypt {
+            keydir,
             file,
             output,
             key_from_stdin,
             trim_underscore_prefix,
         } => decrypt_action(
             &file,
-            &cli.keydir,
+            &keydir,
             output.as_deref(),
             key_from_stdin,
             trim_underscore_prefix,
         ),
         Commands::Env {
+            keydir,
             file,
             key_from_stdin,
             quiet,
             trim_underscore_prefix,
         } => env_action(
             &file,
-            &cli.keydir,
+            &keydir,
             key_from_stdin,
             quiet,
             trim_underscore_prefix,
