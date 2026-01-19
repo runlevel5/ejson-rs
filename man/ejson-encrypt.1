@@ -1,0 +1,225 @@
+.TH EJSON-ENCRYPT 1 "January 2026" "ejson" "User Commands"
+.SH NAME
+ejson-encrypt \- encrypt secrets in EJSON, ETOML, or EYAML files
+.SH SYNOPSIS
+.B ejson encrypt
+.IR file ...
+.SH DESCRIPTION
+.B ejson encrypt
+encrypts string values in one or more secrets files using public-key
+cryptography. The files are modified in place.
+.PP
+The encryption uses the public key embedded in each file's
+.B _public_key
+field. An ephemeral keypair is generated for each encryption session to
+provide forward secrecy.
+.PP
+Already-encrypted values (those starting with
+.BR "EJ[" )
+are left unchanged, making it safe to run
+.B ejson encrypt
+multiple times on the same file. This allows you to add new secrets to an
+existing file and encrypt only the new values.
+.SH OPTIONS
+This command takes no options. File format is auto-detected based on
+file extension.
+.SH FILE FORMAT
+Format detection is automatic based on file extension:
+.TP
+.B JSON
+Extensions:
+.IR .ejson ", " .json
+.TP
+.B TOML
+Extensions:
+.IR .etoml ", " .toml
+.TP
+.B YAML
+Extensions:
+.IR .eyaml ", " .eyml ", " .yaml ", " .yml
+.SH ENCRYPTION RULES
+The following rules apply to all supported formats:
+.IP 1. 4
+.B Public key required
+\- The file must have a top-level
+.B _public_key
+field containing a 64-character hex-encoded public key.
+.IP 2. 4
+.B Strings are encrypted
+\- All string values are encrypted by default.
+.IP 3. 4
+.B Other types preserved
+\- Numbers, booleans, nulls, and dates remain as plaintext.
+.IP 4. 4
+.B Underscore prefix skips encryption
+\- Keys starting with
+.B _
+(underscore) protect their immediate string value from encryption.
+.IP 5. 4
+.B Underscores don't propagate
+\- Nested values under an underscore-prefixed key are still encrypted
+unless they also have underscore prefixes.
+.IP 6. 4
+.B Arrays work element-by-element
+\- Each string element in an array is encrypted individually.
+.IP 7. 4
+.B Already encrypted values unchanged
+\- Values starting with
+.B EJ[
+are not re-encrypted.
+.SH ENCRYPTED VALUE FORMAT
+Encrypted values have the format:
+.PP
+.RS
+.nf
+EJ[1:<nonce>:<ciphertext>]
+.fi
+.RE
+.PP
+Where:
+.IP \(bu 2
+.B 1
+\- Version identifier
+.IP \(bu 2
+.B <nonce>
+\- Base64-encoded encryption nonce
+.IP \(bu 2
+.B <ciphertext>
+\- Base64-encoded encrypted data
+.SH EXAMPLES
+.PP
+Encrypt a single file:
+.RS
+.nf
+$ ejson encrypt secrets.ejson
+Wrote 348 bytes to secrets.ejson.
+.fi
+.RE
+.PP
+Encrypt multiple files:
+.RS
+.nf
+$ ejson encrypt secrets.ejson production.ejson staging.ejson
+Wrote 348 bytes to secrets.ejson.
+Wrote 512 bytes to production.ejson.
+Wrote 256 bytes to staging.ejson.
+.fi
+.RE
+.PP
+Encrypt all secrets files in a directory:
+.RS
+.nf
+$ ejson encrypt config/*.ejson
+.fi
+.RE
+.PP
+.B JSON example
+\- Before encryption:
+.RS
+.nf
+{
+  "_public_key": "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f",
+  "_database_username": "admin",
+  "database_password": "supersecret123"
+}
+.fi
+.RE
+.PP
+After encryption:
+.RS
+.nf
+{
+  "_public_key": "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f",
+  "_database_username": "admin",
+  "database_password": "EJ[1:WGj2t4znULHT1IRveMEdvvNXqZzNBNMsJ5iZVy6Dvxs=:kA6ekF8ViYR5ZLeSmMXWsdLfWr7wn9qS:fcHQtdt6nqcNOXa97/M278RX6w==]"
+}
+.fi
+.RE
+.PP
+.B TOML example
+\- Before encryption:
+.RS
+.nf
+_public_key = "63ccf05a..."
+
+_database_username = "admin"       # Not encrypted
+database_password = "supersecret"  # Will be encrypted
+
+[api]
+secret_key = "api-secret-key"      # Will be encrypted
+_endpoint = "https://api.example.com"  # Not encrypted
+.fi
+.RE
+.PP
+.B YAML example
+\- Before encryption:
+.RS
+.nf
+_public_key: "63ccf05a..."
+
+_database_username: "admin"        # Not encrypted
+database_password: "supersecret"   # Will be encrypted
+
+api:
+  secret_key: "api-secret-key"     # Will be encrypted
+  _endpoint: "https://api.example.com"  # Not encrypted
+
+allowed_hosts:                     # Each element encrypted
+  - "host1.example.com"
+  - "host2.example.com"
+.fi
+.RE
+.SH EXIT STATUS
+.TP
+.B 0
+Success. All files were encrypted.
+.TP
+.B 1
+An error occurred (file not found, invalid format, missing public key,
+file too large, etc.).
+.SH SECURITY CONSIDERATIONS
+.IP \(bu 2
+Encryption uses NaCl Box (Curve25519 + Salsa20 + Poly1305-AES) for
+authenticated public-key encryption.
+.IP \(bu 2
+An ephemeral keypair is generated for each encryption session, providing
+forward secrecy. Even if the document's private key is later compromised,
+past encrypted values cannot be decrypted without the ephemeral key.
+.IP \(bu 2
+File operations use exclusive locking to prevent race conditions when
+multiple processes attempt to encrypt the same file.
+.IP \(bu 2
+Maximum file size is limited to 10 MB to prevent denial of service through
+memory exhaustion.
+.IP \(bu 2
+Path traversal attacks are prevented through validation (no device files,
+FIFOs, or sockets are allowed).
+.IP \(bu 2
+The file's original permissions are preserved after encryption.
+.IP \(bu 2
+Encrypted files are safe to commit to version control. Only the public key
+is needed for encryption; the private key is only needed for decryption.
+.SH TIPS
+.IP \(bu 2
+Use a
+.BR pre-commit
+hook to automatically encrypt secrets before committing. See the ejson-rs
+repository for a pre-commit hook configuration.
+.IP \(bu 2
+Use meaningful underscore-prefixed keys for non-sensitive metadata like
+comments or environment names (e.g.,
+.IR _comment ", " _environment ).
+.IP \(bu 2
+Run
+.B ejson encrypt
+after adding new secrets to ensure they are encrypted before committing.
+.IP \(bu 2
+Use
+.B git diff
+to verify that only intended changes were made before committing.
+.SH SEE ALSO
+.BR ejson (1),
+.BR ejson (5),
+.BR ejson\-keygen (1),
+.BR ejson\-decrypt (1),
+.BR ejson\-env (1)

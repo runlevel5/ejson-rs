@@ -264,13 +264,18 @@ repos:
 
 ## manpage installation
 
-Copy the [`ejson.1`](./ejson.1) and [`ejson-env.1`](./ejson-env.1) to your system's manpage directory:
+Copy the man pages to your system's manpage directories:
 
 ```sh
-sudo cp ejson.1 /usr/local/share/man/man1/ejson.1
-sudo cp ejson-env.1 /usr/local/share/man/man1/ejson-env.1
+sudo cp man/*.1 /usr/local/share/man/man1/
+sudo cp man/*.5 /usr/local/share/man/man5/
 sudo mandb
-man ejson
+man ejson          # Command overview
+man ejson.5        # File format specification
+man ejson-keygen
+man ejson-encrypt
+man ejson-decrypt
+man ejson-env
 ```
 
 ## See Also

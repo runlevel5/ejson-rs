@@ -1,0 +1,182 @@
+.TH EJSON-KEYGEN 1 "January 2026" "ejson" "User Commands"
+.SH NAME
+ejson-keygen \- generate an EJSON keypair for encrypting secrets
+.SH SYNOPSIS
+.B ejson keygen
+[\fB\-k\fR|\fB\-\-keydir\fR \fIpath\fR]
+[\fB\-w\fR|\fB\-\-write\fR]
+.SH DESCRIPTION
+.B ejson keygen
+generates a new public/private keypair for use with EJSON secret encryption.
+The keypair uses public-key, elliptic curve cryptography (NaCl Box:
+Curve25519 + Salsa20 + Poly1305-AES).
+.PP
+By default, both the public and private keys are printed to stdout. This is
+useful if you need to distribute the private key to multiple servers via
+configuration management or other secure channels.
+.PP
+When called with the
+.B \-w
+option, the private key is written to the keydir (a file named after the
+public key), and only the public key is printed to stdout. This is the
+recommended workflow for most use cases.
+.SH OPTIONS
+.TP
+.BR \-k ", " \fB\-\-keydir\fR=\fIpath\fR
+Path to directory containing private keys. Defaults to
+.IR /opt/ejson/keys .
+Setting
+.B EJSON_KEYDIR
+will also set this value, with lower precedence.
+.TP
+.BR \-w ", " \-\-write
+Write the private key to a file in the keydir, named after the public key.
+Only the public key will be printed to stdout. The key file is created with
+restrictive permissions (0440 on Unix systems) to prevent unauthorized access.
+.SH OUTPUT
+Without
+.BR \-w :
+.PP
+.RS
+.nf
+WARNING: The private key will be displayed below.
+         This key should be kept secret and stored securely.
+         Consider using 'ejson keygen -w' to write directly to keydir.
+         Terminal scrollback may retain this key.
+
+Public Key:
+63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f
+Private Key:
+75b80b4a693156eb435f4ed2fe397e583f461f09fd99ec2bd1bdef0a56cf6e64
+.fi
+.RE
+.PP
+With
+.BR \-w :
+.PP
+.RS
+.nf
+53393332c6c7c474af603c078f5696c8fe16677a09a711bba299a6c1c1676a59
+.fi
+.RE
+.PP
+The private key is written to
+.IR /opt/ejson/keys/53393332c6c7c474af603c078f5696c8fe16677a09a711bba299a6c1c1676a59 .
+.SH EXAMPLES
+.PP
+Generate and display both keys (with security warning):
+.RS
+.nf
+$ ejson keygen
+WARNING: The private key will be displayed below.
+         This key should be kept secret and stored securely.
+         Consider using 'ejson keygen -w' to write directly to keydir.
+         Terminal scrollback may retain this key.
+
+Public Key:
+63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f
+Private Key:
+75b80b4a693156eb435f4ed2fe397e583f461f09fd99ec2bd1bdef0a56cf6e64
+.fi
+.RE
+.PP
+Generate keypair and write private key to default keydir (recommended):
+.RS
+.nf
+$ ejson keygen -w
+53393332c6c7c474af603c078f5696c8fe16677a09a711bba299a6c1c1676a59
+.fi
+.RE
+.PP
+Generate keypair and write to a custom keydir:
+.RS
+.nf
+$ ejson keygen -w --keydir /path/to/custom/keys
+a1b2c3d4e5f6...
+.fi
+.RE
+.PP
+View the stored private key:
+.RS
+.nf
+$ cat /opt/ejson/keys/53393332c6c7c474af603c078f5696c8fe16677a09a711bba299a6c1c1676a59
+888a4291bef9135729357b8c70e5a62b0bbe104a679d829cdbe56d46a4481aaf
+.fi
+.RE
+.PP
+Use the public key in a secrets file:
+.RS
+.nf
+$ ejson keygen -w > /tmp/pubkey.txt
+$ cat secrets.ejson
+{
+  "_public_key": "$(cat /tmp/pubkey.txt)",
+  "database_password": "supersecret123"
+}
+.fi
+.RE
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+An error occurred (key generation failed, failed to create keydir,
+failed to write key file, etc.).
+.SH SECURITY CONSIDERATIONS
+.IP \(bu 2
+When using
+.B ejson keygen
+without
+.BR \-w ,
+the private key is displayed in the terminal. This may be retained in
+terminal scrollback, shell history, or screen recordings. Use
+.B \-w
+whenever possible.
+.IP \(bu 2
+Private key files are created with permissions 0440 (owner and group read-only)
+on Unix systems to prevent unauthorized access or accidental modification.
+.IP \(bu 2
+The private key is automatically cleared from memory after use (zeroized)
+to prevent memory disclosure attacks.
+.IP \(bu 2
+The keydir should be protected with appropriate filesystem permissions.
+Only systems that need to decrypt secrets should have access to private keys.
+.IP \(bu 2
+Each secrets file should use a unique keypair. Do not reuse keypairs across
+unrelated projects.
+.IP \(bu 2
+On non-Unix platforms (e.g., Windows), restrictive file permissions are not
+automatically applied. Take care to manually secure key files on these systems.
+.SH ENVIRONMENT
+.TP
+.B EJSON_KEYDIR
+Directory containing private keys. Defaults to
+.IR /opt/ejson/keys .
+Can be overridden by the
+.B \-\-keydir
+option.
+.SH FILES
+.TP
+.I /opt/ejson/keys
+Default directory for storing private keys. Each key file is named after the
+64-byte hex-encoded public key and contains the corresponding private key.
+.SH CRYPTOGRAPHY
+EJSON uses NaCl Box for public-key authenticated encryption:
+.IP \(bu 2
+.B Curve25519
+\- Elliptic curve Diffie-Hellman key agreement
+.IP \(bu 2
+.B Salsa20
+\- Stream cipher for symmetric encryption
+.IP \(bu 2
+.B Poly1305-AES
+\- Message authentication code
+.PP
+Keys are 256-bit (32 bytes) and represented as 64-character hexadecimal strings.
+.SH SEE ALSO
+.BR ejson (1),
+.BR ejson (5),
+.BR ejson\-encrypt (1),
+.BR ejson\-decrypt (1),
+.BR ejson\-env (1)
