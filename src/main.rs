@@ -3,11 +3,12 @@
 //! Supports JSON (.ejson, .json), TOML (.etoml, .toml), and YAML (.eyaml, .eyml, .yaml, .yml) file formats.
 
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
 use clap::{Parser, Subcommand};
+use ejson::env::{export_env, export_quiet, read_and_export_env, ExportFunction};
 use zeroize::Zeroizing;
 
 /// Manage encrypted secrets using public key encryption.
@@ -64,6 +65,25 @@ enum Commands {
         #[arg(long = "trim-underscore-prefix")]
         trim_underscore_prefix: bool,
     },
+
+    /// Export environment variables from the 'environment' key in an EJSON/ETOML/EYAML file
+    Env {
+        /// File to read (format detected by extension: .ejson/.json, .etoml/.toml, or .eyaml/.eyml/.yaml/.yml)
+        file: PathBuf,
+
+        /// Read the private key from STDIN
+        #[arg(long = "key-from-stdin")]
+        key_from_stdin: bool,
+
+        /// Suppress export statement (output: KEY='value' instead of export KEY='value')
+        #[arg(short = 'q', long = "quiet")]
+        quiet: bool,
+
+        /// Strip the first leading underscore from variable names
+        /// (e.g., _ENVIRONMENT becomes ENVIRONMENT, __KEY becomes _KEY)
+        #[arg(long = "trim-underscore-prefix")]
+        trim_underscore_prefix: bool,
+    },
 }
 
 fn main() {
@@ -82,6 +102,18 @@ fn main() {
             &cli.keydir,
             output.as_deref(),
             key_from_stdin,
+            trim_underscore_prefix,
+        ),
+        Commands::Env {
+            file,
+            key_from_stdin,
+            quiet,
+            trim_underscore_prefix,
+        } => env_action(
+            &file,
+            &cli.keydir,
+            key_from_stdin,
+            quiet,
             trim_underscore_prefix,
         ),
     };
@@ -203,6 +235,49 @@ fn decrypt_action(
             .write_all(&decrypted)
             .map_err(|e| format!("Failed to write to stdout: {e}"))?;
     }
+
+    Ok(())
+}
+
+fn env_action(
+    file: &Path,
+    keydir: &str,
+    key_from_stdin: bool,
+    quiet: bool,
+    trim_underscore_prefix: bool,
+) -> Result<(), String> {
+    // Use Zeroizing wrapper for private key to ensure it's cleared from memory
+    let user_supplied_private_key: Zeroizing<String> = if key_from_stdin {
+        let mut stdin_content = Zeroizing::new(String::new());
+        io::stdin()
+            .read_to_string(&mut stdin_content)
+            .map_err(|e| format!("Failed to read from stdin: {e}"))?;
+        Zeroizing::new(stdin_content.trim().to_string())
+    } else {
+        Zeroizing::new(String::new())
+    };
+
+    // Select the export function based on flags
+    let export_func: ExportFunction = if quiet { export_quiet } else { export_env };
+
+    // Get stdout handle with buffering for better performance
+    let mut stdout = BufWriter::new(io::stdout());
+
+    // Execute with the trim flag passed to the library
+    read_and_export_env(
+        file,
+        keydir,
+        &user_supplied_private_key,
+        trim_underscore_prefix,
+        export_func,
+        &mut stdout,
+    )
+    .map_err(|e| format!("Failed to export environment: {e}"))?;
+
+    // Ensure all buffered output is flushed
+    stdout
+        .flush()
+        .map_err(|e| format!("Failed to flush output: {e}"))?;
 
     Ok(())
 }
