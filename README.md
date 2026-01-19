@@ -16,6 +16,10 @@ See [ejsonkms](https://github.com/runlevel5/ejsonkms-rs) to manage secrets with 
 - **Synchronized deployments** — Secrets change with application source, not separately via config management
 - **Battle-tested** — Simple, well-tested, easily-auditable source
 
+## Why another port?
+
+I am fully aware that of other Rust port like [rejson](https://github.com/pseudomuto/rejson) has a similar goal, but I wanted to create a more performant and secure implementation. Additionally I want to be fully in control of the codebase and have the ability to make changes that are specific to my needs.
+
 ## How It Works
 
 Secrets are encrypted using public-key, elliptic curve cryptography ([NaCl](http://nacl.cr.yp.to/) [Box](http://nacl.cr.yp.to/box.html): [Curve25519](http://en.wikipedia.org/wiki/Curve25519) + [Salsa20](http://en.wikipedia.org/wiki/Salsa20) + [Poly1305-AES](http://en.wikipedia.org/wiki/Poly1305-AES)). Public keys are embedded in the secrets file, while private keys are stored separately on the filesystem.
@@ -262,6 +266,7 @@ Copy the [`ejson.1`](./ejson.1) to your system's manpage directory:
 
 ```sh
 sudo cp ejson.1 /usr/local/share/man/man1/ejson.1
+sudo cp ejson-env.1 /usr/local/share/man/man1/ejson-env.1
 sudo mandb
 man ejson
 ```
@@ -269,3 +274,4 @@ man ejson
 ## See Also
 
 - [Original ejson documentation](https://shopify.github.io/ejson)
+- [rejson](https://github.com/pseudomuto/rejson) - yet another Rust port
