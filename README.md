@@ -193,14 +193,14 @@ This ensures that:
 
 Comparing `ejson-rs` with the original Go `Shopify/ejson` implementation:
 
-| Metric | Speed | Memory |
-|--------|--------|--------|
-| Keygen     | Rust is 1.03-1.35x faster than Go | Rust uses ~2.3x less RAM than Go
-| Encryption | Rust is 1.02-1.53x faster than Go | Rust uses 1.58-4.33x less RAM than Go
-| Decryption | Rust is 1.3-1.6x faster than Go   | Rust uses 1.37-2.86x less RAM than Go
+| Metric     | Speed                             | Memory                                |
+|------------|-----------------------------------|---------------------------------------|
+| Keygen     | Rust is 1.03-1.35x faster than Go | Rust uses ~2.3x less RAM than Go      |
+| Encryption | Rust is 1.02-1.53x faster than Go | Rust uses 1.58-4.33x less RAM than Go |
+| Decryption | Rust is 1.3-1.6x faster than Go   | Rust uses 1.37-2.86x less RAM than Go |
 
 The Rust codes are 100% memory safe and all without the overhead of a runtime garbage collector like that of Go.
-In conclusion, you can expect a smaller footprin and more secure/performant version of ejson.
+In conclusion, you can expect a smaller footprint and more secure/performant version of ejson.
 
 ## pre-commit hook
 
