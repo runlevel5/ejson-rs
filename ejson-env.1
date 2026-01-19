@@ -1,0 +1,206 @@
+.TH EJSON-ENV 1 "January 2026" "ejson" "User Commands"
+.SH NAME
+ejson-env \- export environment variables from an encrypted ejson file
+.SH SYNOPSIS
+.B ejson env
+[\fB\-\-keydir\fR \fIpath\fR]
+[\fB\-\-key-from-stdin\fR]
+[\fB\-q\fR|\fB\-\-quiet\fR]
+[\fB\-\-trim-underscore-prefix\fR]
+.I file
+.SH DESCRIPTION
+.B ejson env
+decrypts the specified ejson, etoml, or eyaml file and outputs the contents
+of the
+.I environment
+key as shell-compatible environment variable assignments.
+.PP
+This command is useful for injecting secrets into shell environments or
+generating .env files for applications.
+.PP
+The output format is:
+.PP
+.RS
+.nf
+export KEY='value'
+.fi
+.RE
+.PP
+Or with
+.BR \-\-quiet :
+.PP
+.RS
+.nf
+KEY='value'
+.fi
+.RE
+.PP
+Values are properly quoted for shell safety, handling special characters
+like single quotes, backslashes, and newlines.
+.SH OPTIONS
+.TP
+.BI \-\-keydir= path
+Path to directory containing private keys. Defaults to
+.IR /opt/ejson/keys .
+Setting
+.B EJSON_KEYDIR
+will also set this value, with lower precedence.
+.TP
+.B \-\-key-from-stdin
+Read the private key from standard input instead of looking it up in the keydir.
+This is useful in environments where keys are provided via secure channels
+rather than stored on disk.
+.TP
+.BR \-q ", " \-\-quiet
+Suppress the
+.I export
+keyword prefix. Output will be in the format
+.I KEY='value'
+instead of
+.IR "export KEY='value'" .
+This is useful for generating .env files.
+.TP
+.B \-\-trim-underscore-prefix
+Strip the first leading underscore from variable names. For example,
+.I _DATABASE_URL
+becomes
+.IR DATABASE_URL ,
+and
+.I __INTERNAL_KEY
+becomes
+.IR _INTERNAL_KEY .
+This is useful when you want to mark certain keys as "exportable" in your
+secrets file using a naming convention.
+.SH FILE FORMAT
+The input file must contain an
+.I environment
+key at the top level with a flat object of key-value pairs:
+.PP
+.B JSON (.ejson, .json):
+.RS
+.nf
+{
+  "_public_key": "63ccf05a...",
+  "environment": {
+    "DATABASE_URL": "postgres://user:pass@host/db",
+    "API_KEY": "sk-secret-key"
+  }
+}
+.fi
+.RE
+.PP
+.B YAML (.eyaml, .eyml, .yaml, .yml):
+.RS
+.nf
+_public_key: 63ccf05a...
+environment:
+  DATABASE_URL: postgres://user:pass@host/db
+  API_KEY: sk-secret-key
+.fi
+.RE
+.PP
+.B TOML (.etoml, .toml):
+.RS
+.nf
+_public_key = "63ccf05a..."
+
+[environment]
+DATABASE_URL = "postgres://user:pass@host/db"
+API_KEY = "sk-secret-key"
+.fi
+.RE
+.PP
+Only string values in the
+.I environment
+object are exported. Nested objects or non-string values are ignored.
+.SH KEY VALIDATION
+Environment variable names must be valid shell identifiers:
+.IP \(bu 2
+Must start with a letter (a-z, A-Z) or underscore (_)
+.IP \(bu 2
+May contain letters, digits (0-9), and underscores
+.IP \(bu 2
+Must not be empty
+.PP
+Keys that do not meet these requirements will cause an error.
+.SH EXAMPLES
+.PP
+Basic usage:
+.RS
+.nf
+$ ejson env secrets.ejson
+export DATABASE_URL='postgres://localhost/myapp'
+export API_KEY='sk-1234567890'
+.fi
+.RE
+.PP
+Source directly into current shell:
+.RS
+.nf
+$ eval $(ejson env secrets.ejson)
+$ echo $DATABASE_URL
+postgres://localhost/myapp
+.fi
+.RE
+.PP
+Generate a .env file:
+.RS
+.nf
+$ ejson env -q secrets.ejson > .env
+.fi
+.RE
+.PP
+Use with Docker:
+.RS
+.nf
+$ docker run --env-file <(ejson env -q secrets.ejson) myimage
+.fi
+.RE
+.PP
+Read key from stdin (useful in CI/CD):
+.RS
+.nf
+$ echo "$EJSON_PRIVATE_KEY" | ejson env --key-from-stdin secrets.ejson
+.fi
+.RE
+.PP
+Strip underscore prefix from exported variable names:
+.RS
+.nf
+$ ejson env --trim-underscore-prefix secrets.ejson
+# _DATABASE_URL in file becomes DATABASE_URL in output
+.fi
+.RE
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+An error occurred (file not found, decryption failed, invalid key names, etc.).
+.SH SECURITY CONSIDERATIONS
+.IP \(bu 2
+Decrypted secrets are written to stdout. Be careful about logging or
+storing the output.
+.IP \(bu 2
+When using
+.BR "eval $(ejson env ...)" ,
+secrets become visible in process listings and shell history on some systems.
+.IP \(bu 2
+Consider using process substitution
+.RB ( "<()" )
+when possible to avoid writing secrets to disk.
+.IP \(bu 2
+Values containing null bytes will cause an error.
+.SH ENVIRONMENT
+.TP
+.B EJSON_KEYDIR
+Directory containing private keys. Defaults to
+.IR /opt/ejson/keys .
+Can be overridden by the
+.B \-\-keydir
+option.
+.SH SEE ALSO
+.BR ejson (1),
+.BR ejson (5),
+.BR ejson\-decrypt (1)

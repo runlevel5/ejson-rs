@@ -15,6 +15,7 @@
 
 pub mod boxed_message;
 pub mod crypto;
+pub mod env;
 pub mod format;
 pub mod json;
 pub mod toml;

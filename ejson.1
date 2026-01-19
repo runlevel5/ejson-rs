@@ -60,6 +60,13 @@ Generate an ejson keypair. Alias:
 .BR "ejson g" .
 See
 .BR ejson\-keygen (1).
+.TP
+.B ejson env
+Export environment variables from the
+.I environment
+key in an ejson, etoml, or eyaml file.
+See
+.BR ejson\-env (1).
 .SH WORKFLOW
 .SS 1: Create the Keydir
 By default, EJSON looks for keys in
@@ -143,7 +150,7 @@ Try adding another plaintext secret to the file and run
 again. The
 .I database_password
 field will not be changed, but the new secret will be encrypted.
-.SS 5: Decrypt the file
+.SS 5: Decrypt the file (full output)
 To decrypt the file, you must have a file present in the
 .I keydir
 whose name is the 64-byte hex-encoded public key exactly as embedded in the
@@ -169,6 +176,43 @@ $ ejson decrypt secrets.ejson
 }
 .fi
 .RE
+.SS 6: Export environment variables
+If your secrets file contains an
+.I environment
+key with key-value pairs, you can export them as shell environment variables:
+.PP
+.RS
+.nf
+$ cat secrets.ejson
+{
+  "_public_key": "63ccf05a...",
+  "environment": {
+    "DATABASE_URL": "EJ[1:...]",
+    "API_KEY": "EJ[1:...]"
+  }
+}
+
+$ ejson env secrets.ejson
+export DATABASE_URL='postgres://...'
+export API_KEY='sk-...'
+
+$ eval $(ejson env secrets.ejson)
+.fi
+.RE
+.PP
+Use
+.B \-q
+or
+.B \-\-quiet
+to omit the
+.I export
+prefix, which is useful for .env file generation:
+.PP
+.RS
+.nf
+$ ejson env -q secrets.ejson > .env
+.fi
+.RE
 .SH ENVIRONMENT
 .TP
 .B EJSON_KEYDIR
@@ -192,4 +236,5 @@ ejson-rs is copyright (C) 2026 Trung Lê under MIT license.
 .BR ejson (5),
 .BR ejson\-encrypt (1),
 .BR ejson\-decrypt (1),
-.BR ejson\-keygen (1)
+.BR ejson\-keygen (1),
+.BR ejson\-env (1)

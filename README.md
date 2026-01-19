@@ -6,8 +6,6 @@ This is a drop-in replacement for the original Go implementation, with added sup
 
 ![demo](http://burkelibbey.s3.amazonaws.com/ejson-demo.gif)
 
-See [ejson2env-rs](https://github.com/runlevel5/ejson2env-rs) for a useful tool to help with exporting a portion of secrets as environment variables for environments/tools that require this pattern.
-
 See [ejsonkms](https://github.com/runlevel5/ejsonkms-rs) to manage secrets with the help of AWS KMS.
 
 ## Why ejson?
@@ -113,6 +111,49 @@ $ ejson decrypt --trim-underscore-prefix secrets.ejson
 ```
 
 This transforms keys like `_database_username` to `database_username` in the output, which is useful when consuming decrypted secrets in systems that don't expect underscore-prefixed keys.
+
+### 6. Export Environment Variables
+
+The `ejson env` command extracts variables from the `environment` key and outputs them as shell export statements:
+
+```bash
+# Output export statements
+$ ejson env secrets.ejson
+export API_KEY='secret123'
+export DATABASE_URL='postgres://localhost'
+
+# Load into current shell
+$ eval $(ejson env secrets.ejson)
+
+# Output without "export" prefix (useful for .env files)
+$ ejson env -q secrets.ejson > .env
+
+# Strip leading underscores from variable names
+$ ejson env --trim-underscore-prefix secrets.ejson
+```
+
+**Input file example** (`secrets.ejson`):
+```json
+{
+  "_public_key": "<public key>",
+  "environment": {
+    "DATABASE_URL": "<encrypted>",
+    "API_KEY": "<encrypted>",
+    "_ENVIRONMENT": "production"
+  }
+}
+```
+
+**Output**:
+```bash
+export API_KEY='decrypted-api-key'
+export DATABASE_URL='decrypted-database-url'
+export _ENVIRONMENT='production'
+```
+
+> **Underscore Prefix:** Keys prefixed with `_` (e.g., `_ENVIRONMENT`) are left **unencrypted** in the secrets file. This is useful for non-sensitive configuration values that you want to keep readable. Use `--trim-underscore-prefix` to strip the first leading underscore from variable names in the output (e.g., `_ENVIRONMENT` becomes `ENVIRONMENT`, but `__DOUBLE` becomes `_DOUBLE`).
+
+> **Shell Compatibility:** This command generates `export` statements, which are supported by POSIX-compatible shells such as **bash**, **zsh**, **sh**, and **ksh**. It is not compatible with shells that use different syntax for environment variables (e.g., fish, csh, tcsh).
 
 ## Supported Formats
 
