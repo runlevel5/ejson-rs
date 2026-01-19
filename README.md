@@ -3,6 +3,7 @@
 A Rust implementation of [Shopify/ejson](https://github.com/Shopify/ejson) — a utility for managing secrets in source control using public-key cryptography.
 
 This is a drop-in replacement for the original Go implementation, with added support for **YAML** and **TOML** file formats and strong focus on performance and security.
+Additionally it also integrate `ejson2env` into `ejson env` command for convenience.
 
 ![demo](http://burkelibbey.s3.amazonaws.com/ejson-demo.gif)
 
@@ -236,13 +237,14 @@ This ensures that:
 
 ## Benchmarking
 
-Comparing `ejson-rs` with the original Go `Shopify/ejson` implementation:
+Comparing `ejson-rs` with the original Go `Shopify/ejson` and `Shopify/ejson2end` implementations:
 
 | Metric     | Speed                             | Memory                                |
 |------------|-----------------------------------|---------------------------------------|
 | Keygen     | Rust is 1.03-1.35x faster than Go | Rust uses ~2.3x less RAM than Go      |
 | Encryption | Rust is 1.02-1.53x faster than Go | Rust uses 1.58-4.33x less RAM than Go |
 | Decryption | Rust is 1.3-1.6x faster than Go   | Rust uses 1.37-2.86x less RAM than Go |
+| Env        | Rust is 1.3-4x faster than Go     | Rust uses 1.07-2.1x less RAM than Go  |
 
 The Rust codes are 100% memory safe and all without the overhead of a runtime garbage collector like that of Go.
 In conclusion, you can expect a smaller footprint and more secure/performant version of ejson.
@@ -262,7 +264,7 @@ repos:
 
 ## manpage installation
 
-Copy the [`ejson.1`](./ejson.1) to your system's manpage directory:
+Copy the [`ejson.1`](./ejson.1) and [`ejson-env.1`](./ejson-env.1) to your system's manpage directory:
 
 ```sh
 sudo cp ejson.1 /usr/local/share/man/man1/ejson.1
