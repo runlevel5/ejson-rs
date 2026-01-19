@@ -1,0 +1,195 @@
+.TH EJSON 1 "January 2026" "ejson" "User Commands"
+.SH NAME
+ejson \- manage application secrets in source control via encrypted JSON, TOML, or YAML
+.SH SYNOPSIS
+.B ejson
+[\fB\-\-keydir\fR \fIpath\fR]
+.I COMMAND
+[\fIARGS\fR]
+.SH DESCRIPTION
+.B ejson
+is a utility for managing a collection of secrets in source control.
+The secrets are encrypted using public key, elliptic curve cryptography.
+Secrets are collected in a JSON, TOML, or YAML file, in which all the string values are encrypted.
+Public keys are embedded in the file, and the decrypter looks up the corresponding
+private key from its local filesystem.
+.PP
+See
+.BR ejson (5)
+for more information on the
+.B ejson
+file format, and read on for a workflow example.
+.SH OPTIONS
+.TP
+.BI \-\-keydir= path
+Path to directory containing private keys. Defaults to
+.IR /opt/ejson/keys .
+Setting
+.B EJSON_KEYDIR
+will also set this value, with lower precedence.
+.SH SUPPORTED FORMATS
+Format detection is automatic based on file extension:
+.TP
+.B JSON
+Extensions:
+.IR .ejson ", " .json
+.TP
+.B TOML
+Extensions:
+.IR .etoml ", " .toml
+.TP
+.B YAML
+Extensions:
+.IR .eyaml ", " .eyml ", " .yaml ", " .yml
+.SH COMMANDS
+.TP
+.B ejson encrypt
+Encrypt one or more ejson, etoml, or eyaml files. Alias:
+.BR "ejson e" .
+See
+.BR ejson\-encrypt (1).
+.TP
+.B ejson decrypt
+Decrypt an ejson, etoml, or eyaml file. Alias:
+.BR "ejson d" .
+See
+.BR ejson\-decrypt (1).
+.TP
+.B ejson keygen
+Generate an ejson keypair. Alias:
+.BR "ejson g" .
+See
+.BR ejson\-keygen (1).
+.SH WORKFLOW
+.SS 1: Create the Keydir
+By default, EJSON looks for keys in
+.IR /opt/ejson/keys .
+You can change this by setting
+.B EJSON_KEYDIR
+or passing the
+.B \-keydir
+option.
+.PP
+.RS
+.nf
+$ mkdir -p /opt/ejson/keys
+.fi
+.RE
+.SS 2: Generate a keypair
+When called with
+.BR \-w ,
+.B ejson keygen
+will write the keypair into the
+.I keydir
+and print the public key. Without
+.BR \-w ,
+it will print both keys to stdout. This is useful if you have to distribute
+the key to multiple servers via configuration management, etc.
+.PP
+.RS
+.nf
+$ ejson keygen
+Public Key:
+63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f
+Private Key:
+75b80b4a693156eb435f4ed2fe397e583f461f09fd99ec2bd1bdef0a56cf6e64
+
+$ ejson keygen -w
+53393332c6c7c474af603c078f5696c8fe16677a09a711bba299a6c1c1676a59
+
+$ cat /opt/ejson/keys/5339*
+888a4291bef9135729357b8c70e5a62b0bbe104a679d829cdbe56d46a4481aaf
+.fi
+.RE
+.SS 3: Create an ejson file
+The format is described in more detail in
+.BR ejson (5).
+For now, create a file that looks something like this.
+Fill in the
+.I <key>
+with whatever you got back in step 2.
+.PP
+Create this file as
+.IR secrets.ejson
+(or use
+.IR .etoml " / " .eyaml
+extensions for TOML/YAML formats):
+.PP
+.RS
+.nf
+{
+  "_public_key": "<key>",
+  "database_password": "1234password"
+}
+.fi
+.RE
+.SS 4: Encrypt the file
+Running
+.B ejson encrypt secrets.ejson
+will encrypt any new plaintext keys in the file, and leave any existing
+encrypted keys untouched:
+.PP
+.RS
+.nf
+{
+  "_public_key": "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f",
+  "database_password": "EJ[1:WGj2t4znULHT1IRveMEdvvNXqZzNBNMsJ5iZVy6Dvxs=:..."
+}
+.fi
+.RE
+.PP
+Try adding another plaintext secret to the file and run
+.B ejson encrypt secrets.ejson
+again. The
+.I database_password
+field will not be changed, but the new secret will be encrypted.
+.SS 5: Decrypt the file
+To decrypt the file, you must have a file present in the
+.I keydir
+whose name is the 64-byte hex-encoded public key exactly as embedded in the
+.BR ejson (5)
+document. The contents of that file must be the similarly-encoded private key.
+If you used
+.BR "ejson keygen \-w" ,
+you've already got this covered.
+.PP
+Unlike
+.BR ejson\-encrypt (1),
+which overwrites the specified files,
+.BR ejson\-decrypt (1)
+only takes one file parameter, and prints the output to
+.IR stdout :
+.PP
+.RS
+.nf
+$ ejson decrypt secrets.ejson
+{
+  "_public_key": "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f",
+  "database_password": "1234password"
+}
+.fi
+.RE
+.SH ENVIRONMENT
+.TP
+.B EJSON_KEYDIR
+Directory containing private keys. Defaults to
+.IR /opt/ejson/keys .
+Can be overridden by the
+.B \-\-keydir
+option.
+.SH FILES
+.TP
+.I /opt/ejson/keys
+Default directory for storing private keys. Each key file is named after the
+64-byte hex-encoded public key and contains the corresponding private key.
+.SH BUGS
+Please file bugs at https://github.com/runlevel5/ejson-rs
+.SH HISTORY
+ejson was firstly written in Go by Shopify. Trung Lê rewrote it in Rust.
+.SH COPYRIGHT
+ejson-rs is copyright (C) 2026 Trung Lê under MIT license.
+.SH SEE ALSO
+.BR ejson (5),
+.BR ejson\-encrypt (1),
+.BR ejson\-decrypt (1),
+.BR ejson\-keygen (1)

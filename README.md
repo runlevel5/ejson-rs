@@ -215,6 +215,16 @@ repos:
       - id: run-ejson-encrypt
 ```
 
+## manpage installation
+
+Copy the [`ejson.1`](./ejson.1) to your system's manpage directory:
+
+```sh
+sudo cp ejson.1 /usr/local/share/man/man1/ejson.1
+sudo mandb
+man ejson
+```
+
 ## See Also
 
 - [Original ejson documentation](https://shopify.github.io/ejson)
