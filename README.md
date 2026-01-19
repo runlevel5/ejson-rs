@@ -5,7 +5,7 @@ A Rust implementation of [Shopify/ejson](https://github.com/Shopify/ejson) — a
 This is a drop-in replacement for the original Go implementation, with added support for **YAML** and **TOML** file formats and strong focus on performance and security.
 Additionally it also integrate `ejson2env` into `ejson env` command for convenience.
 
-![demo](http://burkelibbey.s3.amazonaws.com/ejson-demo.gif)
+![demo](./ejson-demo.gif)
 
 See [ejsonkms](https://github.com/runlevel5/ejsonkms-rs) to manage secrets with the help of AWS KMS.
 
