@@ -237,7 +237,7 @@ This ensures that:
 
 ## Benchmarking
 
-Comparing `ejson-rs` with the original Go `Shopify/ejson` and `Shopify/ejson2end` implementations:
+Comparing `ejson-rs` with the original Go `Shopify/ejson` and `Shopify/ejson2env` implementations:
 
 | Metric     | Speed                             | Memory                                |
 |------------|-----------------------------------|---------------------------------------|
