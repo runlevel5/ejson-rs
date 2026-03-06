@@ -6,7 +6,7 @@
 //!
 //! The walker uses `toml_edit` to preserve formatting and comments.
 
-use crate::handler::{FormatError, FormatHandler, WalkAction, KEY_SIZE, PUBLIC_KEY_FIELD};
+use crate::handler::{FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, WalkAction};
 use thiserror::Error;
 use toml_edit::{DocumentMut, Item, Value};
 

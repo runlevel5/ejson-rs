@@ -585,12 +585,11 @@ fn read_private_key_from_disk(pubkey: &KeyBytes, keydir: &str) -> Result<String,
     // This prevents path traversal via malicious public key hex
     if let (Ok(canonical_keydir), Ok(canonical_key_path)) =
         (fs::canonicalize(keydir_path), fs::canonicalize(&key_path))
+        && !canonical_key_path.starts_with(&canonical_keydir)
     {
-        if !canonical_key_path.starts_with(&canonical_keydir) {
-            return Err(EjsonError::InvalidPath(
-                "key path escapes keydir".to_string(),
-            ));
-        }
+        return Err(EjsonError::InvalidPath(
+            "key path escapes keydir".to_string(),
+        ));
     }
 
     fs::read_to_string(&key_path).map_err(|_| {

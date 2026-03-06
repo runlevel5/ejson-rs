@@ -5,8 +5,8 @@
 //! so the nonce and encryption public key are prepended to the encrypted message.
 
 use crypto_box::{
-    aead::{Aead, AeadCore, OsRng},
     PublicKey, SalsaBox, SecretKey,
+    aead::{Aead, AeadCore, OsRng},
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ use std::fmt;
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
-use crate::boxed_message::{is_boxed_message, BoxedMessage};
+use crate::boxed_message::{BoxedMessage, is_boxed_message};
 
 /// Size of a public or private key in bytes.
 pub const KEY_SIZE: usize = 32;

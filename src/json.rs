@@ -7,7 +7,7 @@
 //! The walker uses a scanner-based approach instead of parsing and re-serializing
 //! to preserve key ordering and make diffs meaningful over time.
 
-use crate::handler::{FormatError, FormatHandler, WalkAction, KEY_SIZE, PUBLIC_KEY_FIELD};
+use crate::handler::{FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, WalkAction};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -303,12 +303,12 @@ where
                         let hex = std::str::from_utf8(&data[*i..*i + 4])
                             .map_err(|_| JsonError::InvalidJson)?;
                         *i += 4;
-                        if let Ok(code) = u32::from_str_radix(hex, 16) {
-                            if let Some(ch) = char::from_u32(code) {
-                                let mut buf = [0u8; 4];
-                                let encoded = ch.encode_utf8(&mut buf);
-                                result.extend_from_slice(encoded.as_bytes());
-                            }
+                        if let Ok(code) = u32::from_str_radix(hex, 16)
+                            && let Some(ch) = char::from_u32(code)
+                        {
+                            let mut buf = [0u8; 4];
+                            let encoded = ch.encode_utf8(&mut buf);
+                            result.extend_from_slice(encoded.as_bytes());
                         }
                     }
                     _ => {
@@ -750,12 +750,12 @@ pub mod parallel {
                         let hex = std::str::from_utf8(&data[*i..*i + 4])
                             .map_err(|_| JsonError::InvalidJson)?;
                         *i += 4;
-                        if let Ok(code) = u32::from_str_radix(hex, 16) {
-                            if let Some(ch) = char::from_u32(code) {
-                                let mut buf = [0u8; 4];
-                                let encoded = ch.encode_utf8(&mut buf);
-                                result.extend_from_slice(encoded.as_bytes());
-                            }
+                        if let Ok(code) = u32::from_str_radix(hex, 16)
+                            && let Some(ch) = char::from_u32(code)
+                        {
+                            let mut buf = [0u8; 4];
+                            let encoded = ch.encode_utf8(&mut buf);
+                            result.extend_from_slice(encoded.as_bytes());
                         }
                     }
                     _ => {

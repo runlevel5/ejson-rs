@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use clap::{Parser, Subcommand};
-use ejson::env::{export_env, export_quiet, read_and_export_env, ExportFunction};
+use ejson::env::{ExportFunction, export_env, export_quiet, read_and_export_env};
 use zeroize::Zeroizing;
 
 /// Manage encrypted secrets using public key encryption.
