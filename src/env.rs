@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 
-use crate::typed::DecryptedContent;
 use crate::EjsonError;
+use crate::typed::DecryptedContent;
 use thiserror::Error;
 use zeroize::Zeroize;
 

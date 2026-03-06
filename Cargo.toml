@@ -1,7 +1,8 @@
 [package]
 name = "ejson"
 version = "1.0.1"
-edition = "2021"
+edition = "2024"
+rust-version = "1.94"
 authors = ["Trung Lê <8@tle.id.au>"]
 description = "Manage encrypted secrets using public key encryption"
 license = "MIT"

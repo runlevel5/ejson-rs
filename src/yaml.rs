@@ -6,7 +6,7 @@
 //!
 //! The walker uses `serde_norway` for parsing and serialization.
 
-use crate::handler::{FormatError, FormatHandler, WalkAction, KEY_SIZE, PUBLIC_KEY_FIELD};
+use crate::handler::{FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, WalkAction};
 use serde_norway::{Mapping, Value};
 use thiserror::Error;
 
