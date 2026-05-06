@@ -1,8 +1,8 @@
 [package]
 name = "ejson"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.95"
 authors = ["Trung Lê <8@tle.id.au>"]
 description = "Manage encrypted secrets using public key encryption"
 license = "MIT"
@@ -19,14 +19,14 @@ crypto_box = "0.9"
 zeroize = { version = "1.8", features = ["derive"] }
 
 # CLI
-clap = { version = "4.5", features = ["derive", "env"] }
+clap = { version = "4.6", features = ["derive", "env"] }
 
 # JSON
 serde_json = "1.0"
 
 # TOML
-toml = "0.9"
-toml_edit = "0.24"
+toml = "1.0"
+toml_edit = "0.25"
 
 # YAML
 serde_norway = "0.9"
