@@ -117,14 +117,14 @@ where
 
     fn walk_value(&self, value: &mut Value, is_comment: bool) -> Result<(), TomlError> {
         match value {
-            Value::String(s) => {
-                if !is_comment {
-                    let plaintext = s.value();
-                    let result =
-                        (self.action)(plaintext.as_bytes()).map_err(TomlError::ActionFailed)?;
-                    let result_str = String::from_utf8_lossy(&result).to_string();
-                    *s = toml_edit::Formatted::new(result_str);
-                }
+            Value::String(s)
+                if !is_comment =>
+            {
+                let plaintext = s.value();
+                let result =
+                    (self.action)(plaintext.as_bytes()).map_err(TomlError::ActionFailed)?;
+                let result_str = String::from_utf8_lossy(&result).to_string();
+                *s = toml_edit::Formatted::new(result_str);
             }
             Value::Array(arr) => {
                 for item in arr.iter_mut() {
