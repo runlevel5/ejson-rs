@@ -117,9 +117,7 @@ where
 
     fn walk_value(&self, value: &mut Value, is_comment: bool) -> Result<(), TomlError> {
         match value {
-            Value::String(s)
-                if !is_comment =>
-            {
+            Value::String(s) if !is_comment => {
                 let plaintext = s.value();
                 let result =
                     (self.action)(plaintext.as_bytes()).map_err(TomlError::ActionFailed)?;

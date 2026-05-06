@@ -87,9 +87,7 @@ where
 
     fn walk_value(&self, value: &mut Value, is_comment: bool) -> Result<(), YamlError> {
         match value {
-            Value::String(s)
-                if !is_comment =>
-            {
+            Value::String(s) if !is_comment => {
                 let result = (self.action)(s.as_bytes()).map_err(YamlError::ActionFailed)?;
                 *s = String::from_utf8_lossy(&result).to_string();
             }
