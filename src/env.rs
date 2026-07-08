@@ -230,11 +230,35 @@ fn filtered_value(v: &str) -> (String, bool) {
     (filtered, had_control_chars)
 }
 
-/// Shell-escapes a value for safe use in shell commands.
+/// Identifies the shell syntax to use when exporting environment variables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shell {
+    /// POSIX-compatible shells (bash, zsh, sh, dash, ...): `export KEY='value'`
+    Posix,
+    /// Fish shell: `set -gx KEY 'value'`
+    Fish,
+}
+
+/// Detects the current shell from the environment.
+///
+/// Fish sets `$FISH_VERSION` in its own process, and this is inherited by any
+/// command it directly invokes - this is the standard, documented way for a
+/// child process to detect that it's running under fish. Everything else
+/// (bash, zsh, sh, dash, ...) is treated as POSIX-compatible, which is a safe
+/// default since they all understand `export KEY='value'`.
+pub fn detect_shell() -> Shell {
+    if std::env::var_os("FISH_VERSION").is_some() {
+        Shell::Fish
+    } else {
+        Shell::Posix
+    }
+}
+
+/// Shell-escapes a value for safe use in POSIX shell commands.
 /// This mimics Go's shellescape.Quote behavior which always uses single quotes
 /// and escapes single quotes by ending the quoted string, adding an escaped
 /// single quote, then starting a new quoted string.
-fn shell_quote(s: &str) -> String {
+fn posix_quote(s: &str) -> String {
     // Go's shellescape.Quote behavior:
     // - Always wraps in single quotes
     // - Escapes single quotes as: 'text'"'"'more'
@@ -254,8 +278,32 @@ fn shell_quote(s: &str) -> String {
     result
 }
 
-/// Internal export function that writes environment variables with a prefix.
-fn export(w: &mut dyn Write, prefix: &str, values: &SecretEnvMap) -> Result<(), EnvError> {
+/// Shell-escapes a value for safe use in fish shell commands.
+///
+/// Unlike POSIX, fish's single-quoted strings do support two escape
+/// sequences: `\'` for a literal single quote and `\\` for a literal
+/// backslash. Everything else (including `$`, backticks, and double quotes)
+/// is taken literally inside single quotes, so no other escaping is needed.
+fn fish_quote(s: &str) -> String {
+    let mut result = String::with_capacity(s.len() + 2);
+    result.push('\'');
+    for c in s.chars() {
+        if c == '\'' || c == '\\' {
+            result.push('\\');
+        }
+        result.push(c);
+    }
+    result.push('\'');
+    result
+}
+
+/// Internal export function that writes environment variables for the given shell.
+fn export(
+    w: &mut dyn Write,
+    shell: Shell,
+    exported: bool,
+    values: &SecretEnvMap,
+) -> Result<(), EnvError> {
     // SecretEnvMap uses BTreeMap internally, so iteration is sorted by key
     for (k, v) in values {
         // Validate key is a valid shell identifier
@@ -268,28 +316,96 @@ fn export(w: &mut dyn Write, prefix: &str, values: &SecretEnvMap) -> Result<(), 
             eprintln!("ejson env trimmed control characters from value");
         }
 
-        let quoted = shell_quote(&filtered);
-        let _ = writeln!(w, "{}{}={}", prefix, k, quoted);
+        match shell {
+            Shell::Posix => {
+                let quoted = posix_quote(&filtered);
+                let prefix = if exported { "export " } else { "" };
+                let _ = writeln!(w, "{}{}={}", prefix, k, quoted);
+            }
+            Shell::Fish => {
+                let quoted = fish_quote(&filtered);
+                let flag = if exported { "-gx" } else { "-g" };
+                let _ = writeln!(w, "set {} {} {}", flag, k, quoted);
+            }
+        }
     }
     Ok(())
 }
 
-/// Exports environment variables with "export " prefix.
+/// Exports environment variables using POSIX shell syntax with "export ".
 ///
 /// Output format: `export KEY='value'`
 ///
 /// Returns an error if any key is not a valid shell identifier.
 pub fn export_env(w: &mut dyn Write, values: &SecretEnvMap) -> Result<(), EnvError> {
-    export(w, "export ", values)
+    export(w, Shell::Posix, true, values)
 }
 
-/// Exports environment variables without "export " prefix.
+/// Exports environment variables using POSIX shell syntax without "export ".
 ///
 /// Output format: `KEY='value'`
 ///
 /// Returns an error if any key is not a valid shell identifier.
 pub fn export_quiet(w: &mut dyn Write, values: &SecretEnvMap) -> Result<(), EnvError> {
-    export(w, "", values)
+    export(w, Shell::Posix, false, values)
+}
+
+/// Exports environment variables using fish shell syntax, exported globally.
+///
+/// Output format: `set -gx KEY 'value'`
+///
+/// Returns an error if any key is not a valid shell identifier.
+pub fn export_env_fish(w: &mut dyn Write, values: &SecretEnvMap) -> Result<(), EnvError> {
+    export(w, Shell::Fish, true, values)
+}
+
+/// Exports environment variables using fish shell syntax, without exporting.
+///
+/// Output format: `set -g KEY 'value'`
+///
+/// Returns an error if any key is not a valid shell identifier.
+pub fn export_quiet_fish(w: &mut dyn Write, values: &SecretEnvMap) -> Result<(), EnvError> {
+    export(w, Shell::Fish, false, values)
+}
+
+/// Exports environment variables for an explicitly chosen shell, exported.
+///
+/// Returns an error if any key is not a valid shell identifier.
+pub fn export_env_for_shell(
+    w: &mut dyn Write,
+    values: &SecretEnvMap,
+    shell: Shell,
+) -> Result<(), EnvError> {
+    export(w, shell, true, values)
+}
+
+/// Exports environment variables for an explicitly chosen shell, without exporting.
+///
+/// Returns an error if any key is not a valid shell identifier.
+pub fn export_quiet_for_shell(
+    w: &mut dyn Write,
+    values: &SecretEnvMap,
+    shell: Shell,
+) -> Result<(), EnvError> {
+    export(w, shell, false, values)
+}
+
+/// Exports environment variables, auto-detecting the shell via [`detect_shell`].
+///
+/// Output format: `export KEY='value'` (POSIX) or `set -gx KEY 'value'` (fish).
+///
+/// Returns an error if any key is not a valid shell identifier.
+pub fn export_env_auto(w: &mut dyn Write, values: &SecretEnvMap) -> Result<(), EnvError> {
+    export_env_for_shell(w, values, detect_shell())
+}
+
+/// Exports environment variables without exporting, auto-detecting the shell via [`detect_shell`].
+///
+/// Output format: `KEY='value'` (POSIX) or `set -g KEY 'value'` (fish).
+///
+/// Returns an error if any key is not a valid shell identifier.
+pub fn export_quiet_auto(w: &mut dyn Write, values: &SecretEnvMap) -> Result<(), EnvError> {
+    export_quiet_for_shell(w, values, detect_shell())
 }
 
 #[cfg(test)]
@@ -399,6 +515,98 @@ mod tests {
 
         export_quiet(&mut output, &values).unwrap();
         assert_eq!(String::from_utf8(output).unwrap(), "key='value'\n");
+    }
+
+    #[test]
+    fn test_export_env_fish() {
+        let mut output = Vec::new();
+        let mut values = SecretEnvMap::new();
+        values.insert("key".to_string(), "value".to_string());
+
+        export_env_fish(&mut output, &values).unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "set -gx key 'value'\n");
+    }
+
+    #[test]
+    fn test_export_quiet_fish() {
+        let mut output = Vec::new();
+        let mut values = SecretEnvMap::new();
+        values.insert("key".to_string(), "value".to_string());
+
+        export_quiet_fish(&mut output, &values).unwrap();
+        assert_eq!(String::from_utf8(output).unwrap(), "set -g key 'value'\n");
+    }
+
+    #[test]
+    fn test_fish_quote_single_quote() {
+        let mut output = Vec::new();
+        let mut values = SecretEnvMap::new();
+        values.insert("key".to_string(), "it's a value".to_string());
+
+        export_env_fish(&mut output, &values).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "set -gx key 'it\\'s a value'\n"
+        );
+    }
+
+    #[test]
+    fn test_fish_quote_backslash() {
+        let mut output = Vec::new();
+        let mut values = SecretEnvMap::new();
+        values.insert("key".to_string(), "back\\slash".to_string());
+
+        export_env_fish(&mut output, &values).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "set -gx key 'back\\\\slash'\n"
+        );
+    }
+
+    #[test]
+    fn test_fish_quote_dollar_and_backtick_untouched() {
+        // Unlike POSIX, these need no special handling inside fish single quotes.
+        let mut output = Vec::new();
+        let mut values = SecretEnvMap::new();
+        values.insert("key".to_string(), "$HOME `whoami`".to_string());
+
+        export_env_fish(&mut output, &values).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "set -gx key '$HOME `whoami`'\n"
+        );
+    }
+
+    #[test]
+    fn test_export_for_shell_matches_convenience_functions() {
+        let mut output = Vec::new();
+        let mut values = SecretEnvMap::new();
+        values.insert("key".to_string(), "value".to_string());
+        export_env_for_shell(&mut output, &values, Shell::Fish).unwrap();
+
+        let mut expected = Vec::new();
+        export_env_fish(&mut expected, &values).unwrap();
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_detect_shell() {
+        // SAFETY: env vars are process-global; this test owns FISH_VERSION
+        // for its duration and restores it afterwards. It doesn't run
+        // alongside other tests that touch this variable.
+        let previous = std::env::var_os("FISH_VERSION");
+
+        unsafe { std::env::remove_var("FISH_VERSION") };
+        assert_eq!(detect_shell(), Shell::Posix);
+
+        unsafe { std::env::set_var("FISH_VERSION", "3.7.0") };
+        assert_eq!(detect_shell(), Shell::Fish);
+
+        match previous {
+            Some(v) => unsafe { std::env::set_var("FISH_VERSION", v) },
+            None => unsafe { std::env::remove_var("FISH_VERSION") },
+        }
     }
 
     #[test]
