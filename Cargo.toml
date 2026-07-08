@@ -2,7 +2,7 @@
 name = "ejson"
 version = "1.0.3"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.96.1"
 authors = ["Trung Lê <8@tle.id.au>"]
 description = "Manage encrypted secrets using public key encryption"
 license = "MIT"
