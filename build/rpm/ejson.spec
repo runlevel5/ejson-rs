@@ -1,5 +1,5 @@
 Name:           ejson
-Version:        1.0.3
+Version:        1.0.5
 Release:        1%{?dist}
 Summary:        Manage encrypted secrets using public key encryption
 
@@ -41,5 +41,8 @@ cargo test --release --offline
 %{_bindir}/%{name}
 
 %changelog
+* Wed Jul 08 2026 Trung Lê <8@tle.id.au> - 1.0.5-1
+- Update to 1.0.5.
+
 * Wed Jul 08 2026 Trung Lê <8@tle.id.au> - 1.0.3-1
 - Initial package.
