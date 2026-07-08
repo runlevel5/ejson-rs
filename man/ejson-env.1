@@ -6,6 +6,7 @@ ejson-env \- export environment variables from an encrypted ejson file
 [\fB\-\-keydir\fR \fIpath\fR]
 [\fB\-\-key-from-stdin\fR]
 [\fB\-q\fR|\fB\-\-quiet\fR]
+[\fB\-\-shell\fR \fIauto\fR|\fIposix\fR|\fIfish\fR]
 [\fB\-\-trim-underscore-prefix\fR]
 .I file
 .SH DESCRIPTION
@@ -18,7 +19,9 @@ key as shell-compatible environment variable assignments.
 This command is useful for injecting secrets into shell environments or
 generating .env files for applications.
 .PP
-The output format is:
+By default, the shell syntax is auto-detected (see
+.B \-\-shell
+below). For POSIX-compatible shells, the output format is:
 .PP
 .RS
 .nf
@@ -35,8 +38,26 @@ KEY='value'
 .fi
 .RE
 .PP
+For fish, the output format is:
+.PP
+.RS
+.nf
+set -gx KEY 'value'
+.fi
+.RE
+.PP
+Or with
+.BR \-\-quiet :
+.PP
+.RS
+.nf
+set -g KEY 'value'
+.fi
+.RE
+.PP
 Values are properly quoted for shell safety, handling special characters
-like single quotes, backslashes, and newlines.
+like single quotes, backslashes, and newlines. Fish uses its own quoting
+rules, which differ from POSIX.
 .SH OPTIONS
 .TP
 .BI \-\-keydir= path
@@ -54,11 +75,33 @@ rather than stored on disk.
 .BR \-q ", " \-\-quiet
 Suppress the
 .I export
-keyword prefix. Output will be in the format
+keyword prefix (or, for fish, the
+.I \-x
+export flag). Output will be in the format
 .I KEY='value'
 instead of
 .IR "export KEY='value'" .
 This is useful for generating .env files.
+.TP
+.BI \-\-shell= mode
+Shell syntax to emit. One of:
+.RS
+.IP \(bu 2
+.B auto
+(default) \- detect the running shell via the
+.B FISH_VERSION
+environment variable, which fish sets in its own process. Falls back to
+.B posix
+if not set.
+.IP \(bu 2
+.B posix
+\- always emit
+.I "export KEY='value'" .
+.IP \(bu 2
+.B fish
+\- always emit
+.I "set -gx KEY 'value'" .
+.RE
 .TP
 .B \-\-trim-underscore-prefix
 Strip the first leading underscore from variable names. For example,
@@ -140,6 +183,23 @@ Source directly into current shell:
 $ eval $(ejson env secrets.ejson)
 $ echo $DATABASE_URL
 postgres://localhost/myapp
+.fi
+.RE
+.PP
+Source directly into a fish shell (auto-detected, no flag needed):
+.RS
+.nf
+$ eval (ejson env secrets.ejson)
+$ echo $DATABASE_URL
+postgres://localhost/myapp
+.fi
+.RE
+.PP
+Force fish syntax regardless of the running shell:
+.RS
+.nf
+$ ejson env --shell fish secrets.ejson
+set -gx DATABASE_URL 'postgres://localhost/myapp'
 .fi
 .RE
 .PP

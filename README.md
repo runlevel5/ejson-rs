@@ -144,6 +144,15 @@ $ ejson env -q secrets.ejson > .env
 
 # Strip leading underscores from variable names
 $ ejson env --trim-underscore-prefix secrets.ejson
+
+# In fish, this is auto-detected - no flag needed:
+$ eval (ejson env secrets.ejson)
+set -gx API_KEY 'secret123'
+set -gx DATABASE_URL 'postgres://localhost'
+
+# Force a specific shell's syntax instead of auto-detecting
+$ ejson env --shell fish secrets.ejson
+$ ejson env --shell posix secrets.ejson
 ```
 
 **Input file example** (`secrets.ejson`):
@@ -167,7 +176,7 @@ export _ENVIRONMENT='production'
 
 > **Underscore Prefix:** Keys prefixed with `_` (e.g., `_ENVIRONMENT`) are left **unencrypted** in the secrets file. This is useful for non-sensitive configuration values that you want to keep readable. Use `--trim-underscore-prefix` to strip the first leading underscore from variable names in the output (e.g., `_ENVIRONMENT` becomes `ENVIRONMENT`, but `__DOUBLE` becomes `_DOUBLE`).
 
-> **Shell Compatibility:** This command generates `export` statements, which are supported by POSIX-compatible shells such as **bash**, **zsh**, **sh**, and **ksh**. It is not compatible with shells that use different syntax for environment variables (e.g., fish, csh, tcsh).
+> **Shell Compatibility:** By default, `ejson env` auto-detects the running shell (via `$FISH_VERSION`) and emits `export KEY='value'` for POSIX-compatible shells (**bash**, **zsh**, **sh**, **ksh**) or `set -gx KEY 'value'` for **fish**. Use `--shell posix` or `--shell fish` to force a specific syntax instead of auto-detecting. Other shells with different syntax (e.g. csh, tcsh) are not supported.
 
 ## Supported Formats
 
