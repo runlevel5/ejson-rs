@@ -7,9 +7,24 @@ use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use clap::{Parser, Subcommand};
-use ejson::env::{ExportFunction, export_env, export_quiet, read_and_export_env};
+use clap::{Parser, Subcommand, ValueEnum};
+use ejson::env::{
+    ExportFunction, export_env, export_env_auto, export_env_fish, export_quiet, export_quiet_auto,
+    export_quiet_fish, read_and_export_env,
+};
 use zeroize::Zeroizing;
+
+/// Which shell syntax to emit environment variable assignments in.
+#[derive(ValueEnum, Clone, Copy, Debug, Default)]
+enum ShellArg {
+    /// Detect the running shell from the environment (checks `$FISH_VERSION`).
+    #[default]
+    Auto,
+    /// POSIX-compatible shells (bash, zsh, sh, ...): `export KEY='value'`
+    Posix,
+    /// Fish shell: `set -gx KEY 'value'`
+    Fish,
+}
 
 /// Manage encrypted secrets using public key encryption.
 #[derive(Parser)]
@@ -96,6 +111,11 @@ enum Commands {
         #[arg(short = 'q', long = "quiet")]
         quiet: bool,
 
+        /// Shell syntax to emit. Defaults to auto-detecting fish via $FISH_VERSION,
+        /// otherwise POSIX.
+        #[arg(long = "shell", value_enum, default_value_t = ShellArg::Auto)]
+        shell: ShellArg,
+
         /// Strip the first leading underscore from variable names
         /// (e.g., _ENVIRONMENT becomes ENVIRONMENT, __KEY becomes _KEY)
         #[arg(long = "trim-underscore-prefix")]
@@ -127,12 +147,14 @@ fn main() {
             file,
             key_from_stdin,
             quiet,
+            shell,
             trim_underscore_prefix,
         } => env_action(
             &file,
             &keydir,
             key_from_stdin,
             quiet,
+            shell,
             trim_underscore_prefix,
         ),
     };
@@ -263,6 +285,7 @@ fn env_action(
     keydir: &str,
     key_from_stdin: bool,
     quiet: bool,
+    shell: ShellArg,
     trim_underscore_prefix: bool,
 ) -> Result<(), String> {
     // Use Zeroizing wrapper for private key to ensure it's cleared from memory
@@ -277,7 +300,14 @@ fn env_action(
     };
 
     // Select the export function based on flags
-    let export_func: ExportFunction = if quiet { export_quiet } else { export_env };
+    let export_func: ExportFunction = match (shell, quiet) {
+        (ShellArg::Auto, true) => export_quiet_auto,
+        (ShellArg::Auto, false) => export_env_auto,
+        (ShellArg::Posix, true) => export_quiet,
+        (ShellArg::Posix, false) => export_env,
+        (ShellArg::Fish, true) => export_quiet_fish,
+        (ShellArg::Fish, false) => export_env_fish,
+    };
 
     // Get stdout handle with buffering for better performance
     let mut stdout = BufWriter::new(io::stdout());
