@@ -258,10 +258,42 @@ jobs:
           name: ejson-${{ matrix.target }}
           path: ejson-${{ needs.check-version.outputs.version }}-${{ matrix.target }}.${{ matrix.archive }}
 
+  # Build a source tarball with dependencies vendored in, for the Fedora RPM
+  # spec. It builds fully offline against this instead of using
+  # cargo-rpm-macros' usual "resolve against the system crate registry"
+  # mode. See build/rpm/ejson.spec and .copr/Makefile.
+  vendor-tarball:
+    name: Vendored Source Tarball
+    needs: check-version
+    if: needs.check-version.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Build vendored source tarball
+        run: |
+          NAME="ejson-${{ needs.check-version.outputs.version }}"
+          mkdir -p "$NAME"
+          git archive HEAD | tar -x -C "$NAME"
+          ( cd "$NAME" && mkdir -p .cargo && cargo vendor --locked vendor > .cargo/config.toml )
+          tar cJf "${NAME}-vendored.tar.xz" "$NAME"
+          sha256sum "${NAME}-vendored.tar.xz" > "${NAME}-vendored.tar.xz.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ejson-vendored-source
+          path: |
+            ejson-*-vendored.tar.xz
+            ejson-*-vendored.tar.xz.sha256
+
   # Create GitHub release with all artifacts
   release:
     name: Create Release
-    needs: [check-version, build]
+    needs: [check-version, build, vendor-tarball]
     if: needs.check-version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:

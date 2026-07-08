@@ -40,7 +40,7 @@ cargo build --release
 cp ./target/release/ejson ~/.local/bin/
 ```
 
-> **Note:** As of January 2026, there are no Homebrew, Deb, or RPM packages. Contributions welcome!
+> **Note:** As of July 2026, there are no Homebrew or Deb packages yet. A Fedora RPM spec lives in `build/rpm/`. Contributions welcome!
 
 ## Quick Start
 
