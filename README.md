@@ -31,6 +31,15 @@ Secrets are encrypted using public-key, elliptic curve cryptography ([NaCl](http
 
 Download compiled binaries from [Releases](https://github.com/runlevel5/ejson-rs/releases).
 
+### Homebrew (macOS & Linux)
+
+```bash
+brew tap runlevel5/ejson-rs https://github.com/runlevel5/ejson-rs
+brew install ejson
+```
+
+This installs the same prebuilt binary published to [Releases](https://github.com/runlevel5/ejson-rs/releases) — no compiler needed.
+
 ### Build from Source
 
 ```bash
@@ -40,7 +49,7 @@ cargo build --release
 cp ./target/release/ejson ~/.local/bin/
 ```
 
-> **Note:** As of July 2026, there are no Homebrew or Deb packages yet. A Fedora RPM spec lives in `build/rpm/`. Contributions welcome!
+> **Note:** As of July 2026, there is no Deb package yet. A Fedora RPM spec lives in `build/rpm/`. Contributions welcome!
 
 ## Quick Start
 
