@@ -93,6 +93,11 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             archive: zip
+          # Cross-compiled on the x64 runner: the hosted Windows images ship the
+          # MSVC ARM64 build tools, and rustc auto-detects the cross linker.
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
           - target: powerpc64le-unknown-linux-gnu
             os: ubuntu-latest
             archive: tar.xz
