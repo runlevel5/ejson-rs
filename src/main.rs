@@ -51,6 +51,14 @@ enum Commands {
         /// Write private key to keydir, print only public key
         #[arg(short = 'w', long = "write")]
         write: bool,
+
+        /// Key scheme to generate: v1 (legacy NaCl box) or v2 (hybrid post-quantum)
+        #[arg(long = "scheme", default_value = "v1")]
+        scheme: String,
+
+        /// Generate a v2 hybrid X25519 + ML-KEM-768 keypair (alias for --scheme v2)
+        #[arg(long = "pqc")]
+        pqc: bool,
     },
 
     /// (Re-)encrypt one or more EJSON/ETOML/EYAML files
@@ -127,7 +135,15 @@ fn main() {
     let cli = Cli::parse();
 
     let result = match cli.command {
-        Commands::Keygen { keydir, write } => keygen_action(&keydir, write),
+        Commands::Keygen {
+            keydir,
+            write,
+            scheme,
+            pqc,
+        } => {
+            let scheme = if pqc { "v2".to_string() } else { scheme };
+            keygen_action(&keydir, write, &scheme)
+        }
         Commands::Encrypt { files } => encrypt_action(&files),
         Commands::Decrypt {
             keydir,
@@ -165,16 +181,14 @@ fn main() {
     }
 }
 
-fn keygen_action(keydir: &str, write_flag: bool) -> Result<(), String> {
-    let (pub_key, priv_key) =
-        ejson::generate_keypair().map_err(|e| format!("Key generation failed: {e}"))?;
-
-    // Wrap private key in Zeroizing for automatic cleanup
-    let priv_key = Zeroizing::new(priv_key);
+fn keygen_action(keydir: &str, write_flag: bool, scheme: &str) -> Result<(), String> {
+    let (pub_key, priv_key, key_id) = ejson::generate_keypair_for_scheme(scheme)
+        .map_err(|e| format!("Key generation failed: {e}"))?;
 
     if write_flag {
         let keydir_path = Path::new(keydir);
-        let key_file = keydir_path.join(&pub_key);
+        // The keydir filename is the key ID (the hex public key for v1, a short id for v2).
+        let key_file = keydir_path.join(&key_id);
 
         // Ensure keydir exists
         fs::create_dir_all(keydir_path).map_err(|e| format!("Failed to create keydir: {e}"))?;
@@ -189,7 +203,16 @@ fn keygen_action(keydir: &str, write_flag: bool) -> Result<(), String> {
             .open(&key_file)
             .map_err(|e| format!("Failed to write key file: {e}"))?;
 
-        writeln!(file, "{}", *priv_key).map_err(|e| format!("Failed to write key: {e}"))?;
+        // Ensure the file ends with exactly one trailing newline (v2 bodies are
+        // multi-line). Build the buffer inside Zeroizing so this copy of the private
+        // key is wiped from memory on drop.
+        let mut contents = Zeroizing::new(String::with_capacity(priv_key.len() + 1));
+        contents.push_str(&priv_key);
+        if !contents.ends_with('\n') {
+            contents.push('\n');
+        }
+        file.write_all(contents.as_bytes())
+            .map_err(|e| format!("Failed to write key: {e}"))?;
 
         println!("{pub_key}");
     } else {
@@ -425,7 +448,7 @@ mod tests {
         let keydir = temp_dir.path().to_str().unwrap();
 
         // Run keygen with write flag
-        keygen_action(keydir, true).unwrap();
+        keygen_action(keydir, true, "v1").unwrap();
 
         // Find the key file (should be the only file in keydir)
         let entries: Vec<_> = fs::read_dir(keydir).unwrap().collect();
@@ -443,6 +466,35 @@ mod tests {
             "Key file should have 0o440 permissions, got 0o{:o}",
             mode
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_keygen_hybrid_writes_keyid_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let keydir = temp_dir.path().to_str().unwrap();
+
+        keygen_action(keydir, true, "v2").unwrap();
+
+        let entries: Vec<_> = fs::read_dir(keydir).unwrap().collect();
+        assert_eq!(entries.len(), 1, "Expected exactly one key file");
+        let key_file = entries[0].as_ref().unwrap().path();
+
+        // The keydir filename for a hybrid key is a 32-char key ID.
+        assert_eq!(
+            key_file.file_name().unwrap().to_str().unwrap().len(),
+            32,
+            "Hybrid key file should be named by a 32-char key id"
+        );
+
+        // The file body is the multi-line `ejson-key v2` private key.
+        let contents = fs::read_to_string(&key_file).unwrap();
+        assert!(contents.starts_with("ejson-key v2\n"));
+
+        let mode = fs::metadata(&key_file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o440, "got 0o{mode:o}");
     }
 
     #[test]

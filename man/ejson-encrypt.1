@@ -179,8 +179,14 @@ An error occurred (file not found, invalid format, missing public key,
 file too large, etc.).
 .SH SECURITY CONSIDERATIONS
 .IP \(bu 2
-Encryption uses NaCl Box (Curve25519 + Salsa20 + Poly1305-AES) for
-authenticated public-key encryption.
+The scheme is selected automatically from the document's
+.B _public_key.
+Legacy
+.B v1
+documents use NaCl Box (Curve25519 + XSalsa20 + Poly1305); hybrid
+.B v2
+documents use X25519 + ML-KEM-768 with XChaCha20-Poly1305. See
+.BR ejson (5).
 .IP \(bu 2
 An ephemeral keypair is generated for each encryption session, providing
 forward secrecy. Even if the document's private key is later compromised,

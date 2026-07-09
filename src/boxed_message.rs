@@ -1,19 +1,23 @@
 //! Wire format for encrypted messages.
 //!
-//! The schema is:
+//! Two schema versions are supported:
+//!
 //! ```text
-//! EJ[<version>:<encrypterPublic>:<nonce>:<ciphertext>]
+//! EJ[1:<encrypterPublic>:<nonce>:<ciphertext>]                    (legacy NaCl box)
+//! EJ[2:<ephemeralX25519Public>:<mlkemCiphertext>:<nonce>:<box>]   (hybrid post-quantum)
 //! ```
-//! Where:
-//! - version: Schema version (currently "1")
+//!
+//! The v1 fields are:
 //! - encrypterPublic: Base64-encoded 32-byte public key
 //! - nonce: Base64-encoded 24-byte nonce
 //! - ciphertext: Base64-encoded encrypted data
+//!
+//! The v2 fields are handled in [`crate::hybrid`]; this module provides the shared
+//! envelope parser ([`parse_boxed_envelope`]) and the version-aware
+//! [`is_boxed_message`] check.
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use regex::Regex;
 use std::fmt;
-use std::sync::LazyLock;
 use thiserror::Error;
 
 /// Size of the nonce in bytes.
@@ -22,10 +26,49 @@ pub const NONCE_SIZE: usize = 24;
 /// Size of the public key in bytes.
 pub const PUBLIC_KEY_SIZE: usize = 32;
 
-/// Regex pattern for parsing boxed messages.
-static MESSAGE_PARSER: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^EJ\[(\d):([A-Za-z0-9+=/]{44}):([A-Za-z0-9+=/]{32}):(.+)\]$").unwrap()
-});
+/// Schema version for the legacy NaCl-box format.
+pub const SCHEMA_VERSION_LEGACY: u8 = 1;
+
+/// Schema version for the hybrid post-quantum format.
+pub const SCHEMA_VERSION_HYBRID: u8 = 2;
+
+/// Parse the `EJ[<version>:<field>:...]` envelope common to all schema versions.
+///
+/// Returns the numeric version and the colon-separated fields that follow it, borrowed
+/// from `data` (no copies — the fields can be several kilobytes for v2 messages). The
+/// fields themselves are NOT decoded or validated here; callers validate the field count
+/// and contents for their specific schema version.
+pub fn parse_boxed_envelope(data: &[u8]) -> Result<(u8, Vec<&str>), BoxedMessageError> {
+    let s = std::str::from_utf8(data).map_err(|_| BoxedMessageError::InvalidFormat)?;
+    let body = s
+        .strip_prefix("EJ[")
+        .and_then(|s| s.strip_suffix(']'))
+        .ok_or(BoxedMessageError::InvalidFormat)?;
+
+    let (version_str, rest) = body
+        .split_once(':')
+        .ok_or(BoxedMessageError::InvalidFormat)?;
+    if version_str.is_empty() || rest.is_empty() {
+        return Err(BoxedMessageError::InvalidFormat);
+    }
+
+    let version: u8 = version_str
+        .parse()
+        .map_err(|_| BoxedMessageError::InvalidSchemaVersion)?;
+
+    let fields = rest.split(':').collect();
+    Ok((version, fields))
+}
+
+/// Returns true if `s` decodes as standard base64 to exactly `n` bytes.
+fn is_base64_len(s: &str, n: usize) -> bool {
+    BASE64.decode(s).map(|b| b.len() == n).unwrap_or(false)
+}
+
+/// Returns true if `s` is non-empty and decodes as standard base64 to a non-empty value.
+fn is_base64_nonempty(s: &str) -> bool {
+    !s.is_empty() && BASE64.decode(s).map(|b| !b.is_empty()).unwrap_or(false)
+}
 
 /// Errors that can occur when parsing boxed messages.
 #[derive(Error, Debug)]
@@ -100,57 +143,36 @@ impl BoxedMessage {
         result
     }
 
-    /// Parse a boxed message from wire format.
+    /// Parse a v1 boxed message from wire format.
     pub fn load(data: &[u8]) -> Result<Self, BoxedMessageError> {
-        let s = std::str::from_utf8(data).map_err(|_| BoxedMessageError::InvalidFormat)?;
-
-        let captures = MESSAGE_PARSER
-            .captures(s)
-            .ok_or(BoxedMessageError::InvalidFormat)?;
-
-        // Parse schema version
-        let schema_version: u8 = captures
-            .get(1)
-            .ok_or(BoxedMessageError::InvalidFormat)?
-            .as_str()
-            .parse()
-            .map_err(|_| BoxedMessageError::InvalidSchemaVersion)?;
+        let (version, fields) = parse_boxed_envelope(data)?;
+        if version != SCHEMA_VERSION_LEGACY || fields.len() != 3 {
+            return Err(BoxedMessageError::InvalidFormat);
+        }
 
         // Decode public key
-        let pub_b64 = captures
-            .get(2)
-            .ok_or(BoxedMessageError::InvalidFormat)?
-            .as_str();
         let pub_bytes = BASE64
-            .decode(pub_b64)
+            .decode(fields[0])
             .map_err(|_| BoxedMessageError::InvalidBase64)?;
         let encrypter_public: [u8; PUBLIC_KEY_SIZE] = pub_bytes
             .try_into()
             .map_err(|_| BoxedMessageError::InvalidPublicKey)?;
 
         // Decode nonce
-        let nonce_b64 = captures
-            .get(3)
-            .ok_or(BoxedMessageError::InvalidFormat)?
-            .as_str();
         let nonce_bytes = BASE64
-            .decode(nonce_b64)
+            .decode(fields[1])
             .map_err(|_| BoxedMessageError::InvalidBase64)?;
         let nonce: [u8; NONCE_SIZE] = nonce_bytes
             .try_into()
             .map_err(|_| BoxedMessageError::InvalidNonce)?;
 
         // Decode ciphertext
-        let box_b64 = captures
-            .get(4)
-            .ok_or(BoxedMessageError::InvalidFormat)?
-            .as_str();
         let box_data = BASE64
-            .decode(box_b64)
+            .decode(fields[2])
             .map_err(|_| BoxedMessageError::InvalidBase64)?;
 
         Ok(Self {
-            schema_version,
+            schema_version: version,
             encrypter_public,
             nonce,
             box_data,
@@ -158,18 +180,40 @@ impl BoxedMessage {
     }
 }
 
-/// Check if data is in boxed message format.
-/// Uses a fast prefix check instead of full regex matching.
+/// Check if data is in a supported boxed message format (v1 or v2).
+///
+/// Used to decide whether a string value requires encryption or is already encrypted.
+/// Validates the field count and that each fixed-size field is valid base64 decoding to
+/// exactly its expected byte length (and that the ciphertext field is non-empty base64).
+/// This full validation matters: a value only misclassified as "already boxed" during
+/// `encrypt` would be written out in cleartext, so we do not rely on length alone.
 pub fn is_boxed_message(data: &[u8]) -> bool {
     // Fast path: check prefix first
     if !data.starts_with(b"EJ[") {
         return false;
     }
-    // Only run full regex validation if prefix matches
-    if let Ok(s) = std::str::from_utf8(data) {
-        MESSAGE_PARSER.is_match(s)
-    } else {
-        false
+
+    let Ok((version, fields)) = parse_boxed_envelope(data) else {
+        return false;
+    };
+
+    match version {
+        SCHEMA_VERSION_LEGACY => {
+            // EJ[1:<pub(32)>:<nonce(24)>:<box>]
+            fields.len() == 3
+                && is_base64_len(fields[0], PUBLIC_KEY_SIZE)
+                && is_base64_len(fields[1], NONCE_SIZE)
+                && is_base64_nonempty(fields[2])
+        }
+        SCHEMA_VERSION_HYBRID => {
+            // EJ[2:<ephemeralX25519(32)>:<mlkemCt(1088)>:<nonce(24)>:<box>]
+            fields.len() == 4
+                && is_base64_len(fields[0], crate::hybrid::HYBRID_X25519_KEY_SIZE)
+                && is_base64_len(fields[1], crate::hybrid::HYBRID_MLKEM_CIPHERTEXT_SIZE)
+                && is_base64_len(fields[2], NONCE_SIZE)
+                && is_base64_nonempty(fields[3])
+        }
+        _ => false,
     }
 }
 
@@ -205,5 +249,42 @@ mod tests {
         assert!(!is_boxed_message(b"not encrypted"));
         assert!(!is_boxed_message(b"EJ[invalid"));
         assert!(!is_boxed_message(b""));
+    }
+
+    #[test]
+    fn test_is_boxed_message_rejects_non_base64_fields() {
+        // Correct field *lengths* but the fixed fields contain characters outside the
+        // base64 alphabet ('*', '#'). This must NOT be classified as boxed, otherwise a
+        // plaintext value of this shape would be left in cleartext on encrypt.
+        let bad_pub = format!(
+            "EJ[1:{}:{}:{}]",
+            "*".repeat(44),
+            "AgICAgICAgICAgICAgICAgICAgICAgIC",
+            "AwQFBgcICQo="
+        );
+        assert!(!is_boxed_message(bad_pub.as_bytes()));
+
+        let bad_nonce = format!(
+            "EJ[1:{}:{}:{}]",
+            "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+            "#".repeat(32),
+            "AwQFBgcICQo="
+        );
+        assert!(!is_boxed_message(bad_nonce.as_bytes()));
+
+        // Empty ciphertext field is rejected.
+        let empty_box =
+            b"EJ[1:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=:AgICAgICAgICAgICAgICAgICAgICAgIC:]";
+        assert!(!is_boxed_message(empty_box));
+
+        // Wrong decoded length for the public key field (43 'A's decodes to != 32 bytes).
+        let wrong_len = format!(
+            "EJ[1:{}:{}:{}]",
+            "A".repeat(44),
+            "AgICAgICAgICAgICAgICAgICAgICAgIC",
+            "AwQFBgcICQo="
+        );
+        // 44 base64 chars of 'A' decode to 33 bytes, not 32.
+        assert!(!is_boxed_message(wrong_len.as_bytes()));
     }
 }

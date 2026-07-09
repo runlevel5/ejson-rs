@@ -85,6 +85,17 @@ pub trait FormatHandler: Send + Sync {
     /// hex-encoded 32-byte string.
     fn extract_public_key(&self, data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError>;
 
+    /// Extract the raw `_public_key` value as a string, without interpreting it.
+    ///
+    /// This is used for scheme detection: a legacy `v1` key is a 64-character hex
+    /// string, while a hybrid `v2` key begins with `v2:`. The default implementation
+    /// delegates to [`FormatHandler::extract_public_key`] and hex-encodes the result,
+    /// so existing handlers keep working (legacy-only). Handlers that want to support
+    /// the `v2` scheme should override this to return the raw field value.
+    fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError> {
+        Ok(hex::encode(self.extract_public_key(data)?))
+    }
+
     /// Walk the document tree and apply an action to encryptable string values.
     ///
     /// A value is encryptable if:
@@ -120,6 +131,10 @@ impl FormatHandler for Box<dyn FormatHandler> {
 
     fn extract_public_key(&self, data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError> {
         (**self).extract_public_key(data)
+    }
+
+    fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError> {
+        (**self).extract_public_key_string(data)
     }
 
     fn walk(&self, data: &[u8], action: WalkAction<'_>) -> Result<Vec<u8>, FormatError> {

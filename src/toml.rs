@@ -26,8 +26,8 @@ pub enum TomlError {
     ActionFailed(String),
 }
 
-/// Extract the _public_key value from an ETOML document.
-pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], TomlError> {
+/// Extract the raw `_public_key` string value from an ETOML document.
+pub fn extract_public_key_string(data: &[u8]) -> Result<String, TomlError> {
     let s = String::from_utf8_lossy(data);
     let doc: toml::Value = toml::from_str(&s).map_err(|e| TomlError::InvalidToml(e.to_string()))?;
 
@@ -35,13 +35,21 @@ pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], TomlError> {
         .get(PUBLIC_KEY_FIELD)
         .ok_or(TomlError::PublicKeyMissing)?;
 
-    let key_str = key_value.as_str().ok_or(TomlError::PublicKeyInvalid)?;
+    key_value
+        .as_str()
+        .map(str::to_string)
+        .ok_or(TomlError::PublicKeyInvalid)
+}
+
+/// Extract the _public_key value from an ETOML document as a legacy 32-byte key.
+pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], TomlError> {
+    let key_str = extract_public_key_string(data)?;
 
     if key_str.len() != KEY_SIZE * 2 {
         return Err(TomlError::PublicKeyInvalid);
     }
 
-    let key_bytes = hex::decode(key_str).map_err(|_| TomlError::PublicKeyInvalid)?;
+    let key_bytes = hex::decode(&key_str).map_err(|_| TomlError::PublicKeyInvalid)?;
 
     key_bytes
         .try_into()
@@ -283,6 +291,10 @@ impl FormatHandler for TomlHandler {
 
     fn extract_public_key(&self, data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError> {
         extract_public_key(data).map_err(Into::into)
+    }
+
+    fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError> {
+        extract_public_key_string(data).map_err(Into::into)
     }
 
     fn walk(&self, data: &[u8], action: WalkAction<'_>) -> Result<Vec<u8>, FormatError> {

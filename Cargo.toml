@@ -14,9 +14,16 @@ readme = "README.md"
 exclude = ["/.github", "/benches", ".pre-commit-hooks.yaml", ".tool-versions", "/man", "/target", ".gitignore", "ejson-demo.gif", "/build", "/.copr", "/Formula"]
 
 [dependencies]
-# Cryptography
+# Cryptography (v1 legacy NaCl box)
 crypto_box = "0.9"
 zeroize = { version = "1.8", features = ["derive"] }
+
+# Cryptography (v3 hybrid post-quantum: X25519 + ML-KEM-768 -> HKDF-SHA256 -> XChaCha20-Poly1305)
+ml-kem = { version = "0.3.2", features = ["getrandom"] }
+hkdf = "0.13"
+sha2 = "0.11"
+chacha20poly1305 = { version = "0.11", features = ["getrandom"] }
+x25519-dalek = { version = "3.0", features = ["getrandom", "static_secrets", "zeroize"] }
 
 # CLI
 clap = { version = "4.6", features = ["derive", "env"] }
@@ -37,9 +44,6 @@ hex = "0.4"
 
 # Error handling
 thiserror = "2.0"
-
-# Regex for message parsing
-regex = "1.12"
 
 # File locking
 fs4 = "0.13"

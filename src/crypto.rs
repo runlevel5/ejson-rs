@@ -39,6 +39,9 @@ pub enum CryptoError {
 
     #[error("invalid message format")]
     InvalidMessageFormat,
+
+    #[error("unsupported key scheme: {0}")]
+    UnsupportedScheme(String),
 }
 
 /// A Curve25519 keypair for encryption/decryption operations.
