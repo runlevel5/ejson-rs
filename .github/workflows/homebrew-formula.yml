@@ -1,12 +1,27 @@
 name: Update Homebrew Formula
 
-# Fires when release.yml (or a manual release) publishes a non-prerelease
-# GitHub Release. Regenerates Formula/ejson.rb from the new release's
-# assets and opens a PR — nobody has to hand-copy version numbers or
-# sha256 checksums.
+# Regenerates Formula/ejson.rb from a release's assets and opens a PR — nobody
+# has to hand-copy version numbers or sha256 checksums.
+#
+# Called from release.yml after it publishes a release. It cannot use an
+# `on: release` trigger for that: the release is created with the workflow's
+# default GITHUB_TOKEN, and events created by that token never trigger other
+# workflows (GitHub's recursion guard). Running as a job of the same release
+# run avoids the problem entirely. The workflow_dispatch trigger is a manual
+# fallback for backfilling a missed release.
 on:
-  release:
-    types: [released]
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to build the formula from (e.g. v1.0.5)"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build the formula from (e.g. v1.0.5)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -25,7 +40,7 @@ jobs:
         id: checksums
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           VERSION="${TAG#v}"

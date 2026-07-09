@@ -335,3 +335,18 @@ jobs:
         run: cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # Open a PR bumping Formula/ejson.rb to the just-published release. This runs
+  # as part of the release run because a separate `on: release` workflow would
+  # never fire: the release above is created with the default GITHUB_TOKEN, and
+  # events created by that token don't trigger other workflows.
+  update-formula:
+    name: Update Homebrew Formula
+    needs: [check-version, release]
+    if: needs.check-version.outputs.should_release == 'true'
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: ./.github/workflows/homebrew-formula.yml
+    with:
+      tag: v${{ needs.check-version.outputs.version }}
