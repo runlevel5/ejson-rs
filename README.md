@@ -23,7 +23,12 @@ I am fully aware that of other Rust port like [rejson](https://github.com/pseudo
 
 ## How It Works
 
-Secrets are encrypted using public-key, elliptic curve cryptography ([NaCl](http://nacl.cr.yp.to/) [Box](http://nacl.cr.yp.to/box.html): [Curve25519](http://en.wikipedia.org/wiki/Curve25519) + [Salsa20](http://en.wikipedia.org/wiki/Salsa20) + [Poly1305-AES](http://en.wikipedia.org/wiki/Poly1305-AES)). Public keys are embedded in the secrets file, while private keys are stored separately on the filesystem.
+Secrets are encrypted using public-key cryptography. Public keys are embedded in the secrets file, while private keys are stored separately on the filesystem. Two schemes are supported:
+
+- **`v1` (default)** — legacy [NaCl](http://nacl.cr.yp.to/) [Box](http://nacl.cr.yp.to/box.html): [Curve25519](http://en.wikipedia.org/wiki/Curve25519) + XSalsa20 + Poly1305. Encrypted values look like `EJ[1:...]`.
+- **`v2` (hybrid post-quantum)** — X25519 combined with [ML-KEM-768](https://csrc.nist.gov/pubs/fips/203/final) (FIPS 203); the two shared secrets are run through HKDF-SHA256 and values are encrypted with XChaCha20-Poly1305. Encrypted values look like `EJ[2:...]`. This protects against "harvest-now-decrypt-later" quantum attacks: an adversary must break *both* X25519 and ML-KEM. Generate `v2` keys with `ejson keygen --pqc`.
+
+Both schemes interoperate within the same tool — existing `v1` keys and documents keep working unchanged, and `ejson decrypt`/`ejson encrypt` auto-detect the scheme from the document's `_public_key`.
 
 ## Installation
 
@@ -81,6 +86,22 @@ $ ejson keygen -w
 53393332c6c7c474af603c078f5696c8fe16677a09a711bba299a6c1c1676a59
 ```
 
+By default `keygen` generates a legacy `v1` keypair. To generate a hybrid
+post-quantum `v2` keypair, use `--pqc` (or `--scheme v2`):
+
+```bash
+$ ejson keygen --pqc -w
+v2:<base64 X25519 public key + ML-KEM-768 encapsulation key>
+$ ls /opt/ejson/keys
+<32-character key id>
+```
+
+Hybrid public keys are intentionally much longer than legacy keys because the full
+ML-KEM encapsulation key is embedded in the document. This preserves the workflow where
+anyone who can edit the document can add new secrets without access to the private
+keydir. The `v2` private key is stored in an `ejson-key v2` file named by a 32-character
+key ID (rather than the public key itself).
+
 ### 3. Create a Secrets File
 
 Create `secrets.ejson` (or `.etoml` / `.eyaml`):
@@ -114,7 +135,9 @@ Result:
 $ ejson decrypt secrets.ejson
 ```
 
-The private key must be in the keydir, named after the public key. If you used `ejson keygen -w`, this is already set up.
+The private key must be in the keydir. For `v1` keys the filename is the 64-character
+hex public key; for `v2` keys it is the 32-character key ID. If you used
+`ejson keygen -w` (or `keygen --pqc -w`), this is already set up.
 
 #### Trimming Underscore Prefixes
 
@@ -192,12 +215,13 @@ Format detection is automatic based on file extension:
 
 These rules apply to all formats:
 
-1. **Public key required** — Must have a top-level `_public_key` field
+1. **Public key required** — Must have a top-level `_public_key` field. For `v1` it is a 64-character hex key; for `v2` it begins with `v2:` followed by a base64-encoded X25519 public key plus ML-KEM-768 encapsulation key.
 2. **Strings are encrypted** — All string values are encrypted by default
 3. **Other types are not encrypted** — Numbers, booleans, nulls, dates remain plaintext
 4. **Underscore prefix skips encryption** — Keys starting with `_` protect their immediate value
 5. **Underscores don't propagate** — Nested values under `_key` are still encrypted unless they also have underscore prefixes
 6. **Arrays work element-by-element** — String arrays have each element encrypted individually
+7. **Encrypted values are schema-tagged** — legacy values are `EJ[1:<ephemeral public>:<nonce>:<ciphertext>]`; hybrid values are `EJ[2:<ephemeral X25519 public>:<ML-KEM ciphertext>:<nonce>:<ciphertext>]`. Existing `EJ[1:...]` values remain decryptable.
 
 ### Example: TOML
 

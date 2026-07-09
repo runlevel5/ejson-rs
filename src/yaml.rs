@@ -26,8 +26,8 @@ pub enum YamlError {
     ActionFailed(String),
 }
 
-/// Extract the _public_key value from an EYAML document.
-pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], YamlError> {
+/// Extract the raw `_public_key` string value from an EYAML document.
+pub fn extract_public_key_string(data: &[u8]) -> Result<String, YamlError> {
     let s = String::from_utf8_lossy(data);
     let doc: Value =
         serde_norway::from_str(&s).map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
@@ -36,13 +36,21 @@ pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], YamlError> {
         .get(PUBLIC_KEY_FIELD)
         .ok_or(YamlError::PublicKeyMissing)?;
 
-    let key_str = key_value.as_str().ok_or(YamlError::PublicKeyInvalid)?;
+    key_value
+        .as_str()
+        .map(str::to_string)
+        .ok_or(YamlError::PublicKeyInvalid)
+}
+
+/// Extract the _public_key value from an EYAML document as a legacy 32-byte key.
+pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], YamlError> {
+    let key_str = extract_public_key_string(data)?;
 
     if key_str.len() != KEY_SIZE * 2 {
         return Err(YamlError::PublicKeyInvalid);
     }
 
-    let key_bytes = hex::decode(key_str).map_err(|_| YamlError::PublicKeyInvalid)?;
+    let key_bytes = hex::decode(&key_str).map_err(|_| YamlError::PublicKeyInvalid)?;
 
     key_bytes
         .try_into()
@@ -207,6 +215,10 @@ impl FormatHandler for YamlHandler {
 
     fn extract_public_key(&self, data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError> {
         extract_public_key(data).map_err(Into::into)
+    }
+
+    fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError> {
+        extract_public_key_string(data).map_err(Into::into)
     }
 
     fn walk(&self, data: &[u8], action: WalkAction<'_>) -> Result<Vec<u8>, FormatError> {

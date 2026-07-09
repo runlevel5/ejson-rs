@@ -5,11 +5,24 @@ ejson-keygen \- generate an EJSON keypair for encrypting secrets
 .B ejson keygen
 [\fB\-k\fR|\fB\-\-keydir\fR \fIpath\fR]
 [\fB\-w\fR|\fB\-\-write\fR]
+[\fB\-\-scheme\fR \fIv1\fR|\fIv2\fR]
+[\fB\-\-pqc\fR]
 .SH DESCRIPTION
 .B ejson keygen
 generates a new public/private keypair for use with EJSON secret encryption.
-The keypair uses public-key, elliptic curve cryptography (NaCl Box:
-Curve25519 + Salsa20 + Poly1305-AES).
+.PP
+By default a legacy
+.B v1
+keypair is generated, using public-key elliptic curve cryptography (NaCl Box:
+Curve25519 + XSalsa20 + Poly1305). With
+.B \-\-scheme v2
+(or
+.BR \-\-pqc ),
+a hybrid post-quantum
+.B v2
+keypair is generated instead, combining X25519 with ML-KEM-768 (FIPS 203). See
+.B CRYPTOGRAPHY
+below.
 .PP
 By default, both the public and private keys are printed to stdout. This is
 useful if you need to distribute the private key to multiple servers via
@@ -17,9 +30,9 @@ configuration management or other secure channels.
 .PP
 When called with the
 .B \-w
-option, the private key is written to the keydir (a file named after the
-public key), and only the public key is printed to stdout. This is the
-recommended workflow for most use cases.
+option, the private key is written to the keydir (a file named after the key
+ID), and only the public key is printed to stdout. This is the recommended
+workflow for most use cases.
 .SH OPTIONS
 .TP
 .BR \-k ", " \fB\-\-keydir\fR=\fIpath\fR
@@ -30,9 +43,22 @@ Setting
 will also set this value, with lower precedence.
 .TP
 .BR \-w ", " \-\-write
-Write the private key to a file in the keydir, named after the public key.
-Only the public key will be printed to stdout. The key file is created with
-restrictive permissions (0440 on Unix systems) to prevent unauthorized access.
+Write the private key to a file in the keydir, named after the key ID. Only the
+public key will be printed to stdout. The key file is created with restrictive
+permissions (0440 on Unix systems) to prevent unauthorized access.
+.TP
+.BI \-\-scheme= mode
+Key scheme to generate:
+.B v1
+(default, legacy NaCl box) or
+.B v2
+(hybrid post-quantum X25519 + ML-KEM-768).
+.TP
+.B \-\-pqc
+Generate a
+.B v2
+hybrid post-quantum keypair. Equivalent to
+.BR "\-\-scheme v2" .
 .SH OUTPUT
 Without
 .BR \-w :
@@ -93,6 +119,16 @@ Generate keypair and write to a custom keydir:
 .nf
 $ ejson keygen -w --keydir /path/to/custom/keys
 a1b2c3d4e5f6...
+.fi
+.RE
+.PP
+Generate a hybrid post-quantum (v2) keypair and write it to the keydir:
+.RS
+.nf
+$ ejson keygen --pqc -w
+v2:7H5m+52tsfPfoNlJD3JE0SMdDjBBmMJSPVEnw...
+$ ls /opt/ejson/keys
+55ac8eb3095023ef294596a0bd91951c
 .fi
 .RE
 .PP
@@ -159,21 +195,55 @@ option.
 .SH FILES
 .TP
 .I /opt/ejson/keys
-Default directory for storing private keys. Each key file is named after the
-64-byte hex-encoded public key and contains the corresponding private key.
+Default directory for storing private keys. Each key file is named after the key
+ID: for
+.B v1
+this is the 64-character hex public key; for
+.B v2
+it is a 32-character derived key ID. The file contains the corresponding private
+key (a
+.B v2
+file is a multi-line
+.I "ejson-key v2"
+document).
 .SH CRYPTOGRAPHY
-EJSON uses NaCl Box for public-key authenticated encryption:
+The legacy
+.B v1
+scheme uses NaCl Box for public-key authenticated encryption:
 .IP \(bu 2
 .B Curve25519
 \- Elliptic curve Diffie-Hellman key agreement
 .IP \(bu 2
-.B Salsa20
+.B XSalsa20
 \- Stream cipher for symmetric encryption
 .IP \(bu 2
-.B Poly1305-AES
+.B Poly1305
 \- Message authentication code
 .PP
-Keys are 256-bit (32 bytes) and represented as 64-character hexadecimal strings.
+.B v1
+keys are 256-bit (32 bytes), represented as 64-character hexadecimal strings.
+.PP
+The hybrid
+.B v2
+scheme combines a classical and a post-quantum primitive so that an attacker must
+break both:
+.IP \(bu 2
+.B X25519
+\- classical elliptic curve Diffie-Hellman
+.IP \(bu 2
+.B ML-KEM-768
+\- NIST post-quantum key-encapsulation mechanism (FIPS 203)
+.IP \(bu 2
+.B HKDF-SHA256
+\- derives the symmetric key from both shared secrets
+.IP \(bu 2
+.B XChaCha20-Poly1305
+\- authenticated encryption of values
+.PP
+.B v2
+public keys begin with
+.I v2:
+and embed both the X25519 public key and the ML-KEM encapsulation key.
 .SH SEE ALSO
 .BR ejson (1),
 .BR ejson (5),

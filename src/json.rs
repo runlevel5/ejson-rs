@@ -27,21 +27,31 @@ pub enum JsonError {
     ActionFailed(String),
 }
 
-/// Extract the _public_key value from an EJSON document.
-pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], JsonError> {
+/// Extract the raw `_public_key` string value from an EJSON document.
+///
+/// The value is returned uninterpreted; scheme detection happens in [`crate::keys`].
+pub fn extract_public_key_string(data: &[u8]) -> Result<String, JsonError> {
     let obj: Value = serde_json::from_slice(data).map_err(|_| JsonError::InvalidJson)?;
 
     let key_value = obj
         .get(PUBLIC_KEY_FIELD)
         .ok_or(JsonError::PublicKeyMissing)?;
 
-    let key_str = key_value.as_str().ok_or(JsonError::PublicKeyInvalid)?;
+    key_value
+        .as_str()
+        .map(str::to_string)
+        .ok_or(JsonError::PublicKeyInvalid)
+}
+
+/// Extract the _public_key value from an EJSON document as a legacy 32-byte key.
+pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], JsonError> {
+    let key_str = extract_public_key_string(data)?;
 
     if key_str.len() != KEY_SIZE * 2 {
         return Err(JsonError::PublicKeyInvalid);
     }
 
-    let key_bytes = hex::decode(key_str).map_err(|_| JsonError::PublicKeyInvalid)?;
+    let key_bytes = hex::decode(&key_str).map_err(|_| JsonError::PublicKeyInvalid)?;
 
     key_bytes
         .try_into()
@@ -888,6 +898,10 @@ impl FormatHandler for JsonHandler {
 
     fn extract_public_key(&self, data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError> {
         extract_public_key(data).map_err(Into::into)
+    }
+
+    fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError> {
+        extract_public_key_string(data).map_err(Into::into)
     }
 
     fn walk(&self, data: &[u8], action: WalkAction<'_>) -> Result<Vec<u8>, FormatError> {

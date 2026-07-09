@@ -18,7 +18,9 @@ pub mod crypto;
 pub mod env;
 pub mod format;
 pub mod handler;
+pub mod hybrid;
 pub mod json;
+pub mod keys;
 pub mod toml;
 pub mod typed;
 pub mod yaml;
@@ -96,6 +98,20 @@ pub enum EjsonError {
 pub fn generate_keypair() -> Result<(String, String), EjsonError> {
     let kp = Keypair::generate()?;
     Ok((kp.public_string(), kp.private_string()))
+}
+
+/// Generate a new ejson keypair for the named scheme (`v1` or `v2`, plus aliases).
+///
+/// Returns `(public_key, private_key, key_id)`:
+/// - `public_key` goes in the document's `_public_key` field (hex for `v1`, `v2:...` for `v2`).
+/// - `private_key` is written to the keydir; for `v2` it is a multi-line `ejson-key v2` file.
+/// - `key_id` is the keydir filename (the hex public key for `v1`, a 32-char id for `v2`).
+///
+/// The private key is returned in a `Zeroizing` wrapper and should be handled securely.
+pub fn generate_keypair_for_scheme(
+    scheme: &str,
+) -> Result<(String, Zeroizing<String>, String), EjsonError> {
+    Ok(keys::generate_keypair_for_scheme(scheme)?)
 }
 
 /// Validate that a path is safe to use (no path traversal, symlinks to outside, etc.)
@@ -201,12 +217,10 @@ fn encrypt_data<W: Write>(
     // Preprocess the data (e.g., collapse multiline strings for JSON)
     let data = handler.preprocess(data)?;
 
-    // Extract the public key
-    let pubkey = handler.extract_public_key(&data)?;
-
-    // Generate ephemeral keypair for this encryption session
-    let my_kp = Keypair::generate()?;
-    let encrypter = my_kp.encrypter(pubkey);
+    // Extract the public key and select the encryption scheme from it.
+    let pubkey_string = handler.extract_public_key_string(&data)?;
+    let pubkey = keys::PublicKey::parse(&pubkey_string)?;
+    let encrypter = keys::AnyEncrypter::for_public_key(&pubkey)?;
 
     // Create encryption closure
     let encrypt_fn = |plaintext: &[u8]| encrypter.encrypt(plaintext).map_err(|e| e.to_string());
@@ -327,13 +341,13 @@ fn decrypt_data<W: Write>(
     // Get the appropriate handler for this format
     let handler = format.handler();
 
-    // Extract public key using the handler
-    let pubkey = handler.extract_public_key(data)?;
+    // Extract public key using the handler and select the scheme from it.
+    let pubkey_string = handler.extract_public_key_string(data)?;
+    let pubkey = keys::PublicKey::parse(&pubkey_string)?;
 
-    // Find the private key and create decrypter
+    // Find the matching private key and create a scheme-aware decrypter.
     let privkey = find_private_key(&pubkey, keydir, user_supplied_private_key)?;
-    let kp = Keypair::from_keys(pubkey, privkey);
-    let decrypter = kp.decrypter();
+    let decrypter = keys::AnyDecrypter::new(&pubkey, privkey)?;
 
     // Create decryption closure that conditionally decrypts
     let decrypt_fn = |ciphertext: &[u8]| {
@@ -544,10 +558,10 @@ fn trim_underscore_prefix_from_keys(
 }
 
 fn find_private_key(
-    pubkey: &KeyBytes,
+    pubkey: &keys::PublicKey,
     keydir: &str,
     user_supplied_private_key: &str,
-) -> Result<KeyBytes, EjsonError> {
+) -> Result<keys::PrivateKey, EjsonError> {
     // Use Zeroizing to ensure the private key string is cleared from memory
     let privkey_string: Zeroizing<String> = if user_supplied_private_key.is_empty() {
         Zeroizing::new(read_private_key_from_disk(pubkey, keydir)?)
@@ -555,34 +569,31 @@ fn find_private_key(
         Zeroizing::new(user_supplied_private_key.to_string())
     };
 
-    // Decode hex - the intermediate Vec will be small and short-lived
-    let mut privkey_bytes = Zeroizing::new(hex::decode(privkey_string.trim())?);
-
-    if privkey_bytes.len() != 32 {
-        return Err(EjsonError::InvalidPrivateKey);
-    }
-
-    let privkey: KeyBytes = privkey_bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| EjsonError::InvalidPrivateKey)?;
-
-    // Zeroize the intermediate bytes
-    privkey_bytes.iter_mut().for_each(|b| *b = 0);
-
-    Ok(privkey)
+    // Parse scheme-aware private key material for the given public key. Malformed key
+    // material is surfaced as the stable `InvalidPrivateKey` error (preserving the prior
+    // public contract); a well-formed key that doesn't match the public key surfaces as
+    // the underlying crypto error.
+    keys::PrivateKey::parse_for_public(pubkey, &privkey_string).map_err(|e| match e {
+        CryptoError::InvalidKeyLength => EjsonError::InvalidPrivateKey,
+        other => EjsonError::Crypto(other),
+    })
 }
 
-fn read_private_key_from_disk(pubkey: &KeyBytes, keydir: &str) -> Result<String, EjsonError> {
-    let pubkey_hex = hex::encode(pubkey);
+fn read_private_key_from_disk(
+    pubkey: &keys::PublicKey,
+    keydir: &str,
+) -> Result<String, EjsonError> {
+    // The keydir filename is the key ID: for legacy keys this is the 64-char hex public
+    // key (unchanged); for hybrid keys it is a 32-char derived ID.
+    let key_id = pubkey.key_id();
     let keydir_path = Path::new(keydir);
-    let key_path = keydir_path.join(&pubkey_hex);
+    let key_path = keydir_path.join(&key_id);
 
     // Validate the constructed path
     validate_path(&key_path)?;
 
     // Verify the path is still within keydir after resolution
-    // This prevents path traversal via malicious public key hex
+    // This prevents path traversal via a malicious key ID
     if let (Ok(canonical_keydir), Ok(canonical_key_path)) =
         (fs::canonicalize(keydir_path), fs::canonicalize(&key_path))
         && !canonical_key_path.starts_with(&canonical_keydir)
@@ -594,9 +605,9 @@ fn read_private_key_from_disk(pubkey: &KeyBytes, keydir: &str) -> Result<String,
 
     fs::read_to_string(&key_path).map_err(|_| {
         // Don't include the full path in error messages to avoid information disclosure
+        let prefix: String = key_id.chars().take(8).collect();
         EjsonError::KeyFileError(format!(
-            "key file for public key {}... not found or unreadable",
-            &pubkey_hex[..8]
+            "key file for public key {prefix}... not found or unreadable"
         ))
     })
 }
@@ -816,7 +827,7 @@ secret: "my secret"
 
     #[test]
     fn test_invalid_private_key_length() {
-        let pubkey = [0u8; 32];
+        let pubkey = keys::PublicKey::Legacy([0u8; 32]);
         let result = find_private_key(&pubkey, "/nonexistent", "deadbeef"); // Too short
         assert!(matches!(result, Err(EjsonError::InvalidPrivateKey)));
     }
@@ -1145,5 +1156,38 @@ environment:
             .expect("should have environment (trimmed)");
         let foo = env.get("FOO").expect("should have FOO (trimmed)");
         assert_eq!(foo.as_str(), Some("bar"));
+    }
+
+    #[test]
+    fn test_hybrid_encrypt_decrypt_file() {
+        // Generate a v2 hybrid keypair and store the private key under its key id.
+        let (pub_key, priv_key, key_id) = generate_keypair_for_scheme("v2").unwrap();
+        assert!(pub_key.starts_with("v2:"));
+
+        let temp_dir = TempDir::new().unwrap();
+        let keydir = temp_dir.path().to_str().unwrap();
+        fs::write(temp_dir.path().join(&key_id), priv_key.as_bytes()).unwrap();
+
+        // Write a document with a nested secret and a plaintext (underscore) comment.
+        let ejson_path = temp_dir.path().join("secrets.ejson");
+        let original = format!(
+            r#"{{"_public_key": "{pub_key}", "a": "b", "nested": {{"secret": "value"}}, "_comment": "plaintext"}}"#
+        );
+        fs::write(&ejson_path, &original).unwrap();
+
+        // Encrypt in place: encryptable values become v2 boxes, comment stays plaintext.
+        encrypt_file_in_place(&ejson_path).unwrap();
+        let ciphertext = fs::read_to_string(&ejson_path).unwrap();
+        assert!(ciphertext.contains(r#""a": "EJ[2:"#));
+        assert!(ciphertext.contains(r#""secret": "EJ[2:"#));
+        assert!(ciphertext.contains(r#""_comment": "plaintext""#));
+
+        // Decrypt via the keydir.
+        let out = decrypt_file(&ejson_path, keydir, "", false).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), original);
+
+        // Decrypt via a user-supplied (multi-line) private key, ignoring the keydir.
+        let out = decrypt_file(&ejson_path, "/does/not/matter", &priv_key, false).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), original);
     }
 }
