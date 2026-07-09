@@ -104,6 +104,12 @@ jobs:
           - target: powerpc64le-unknown-linux-musl
             os: ubuntu-latest
             archive: tar.xz
+          # Big-endian ppc64 (distinct from the little-endian powerpc64le above).
+          # Verified working, including cross-endian wire-format interop with
+          # powerpc64le, on real POWER9 big-endian hardware.
+          - target: powerpc64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.xz
           - target: x86_64-unknown-freebsd
             os: ubuntu-latest
             archive: tar.xz
@@ -196,6 +202,18 @@ jobs:
         run: |
           echo '[target.powerpc64le-unknown-linux-musl]' >> ~/.cargo/config.toml
           echo 'linker = "powerpc64le-buildroot-linux-musl-gcc"' >> ~/.cargo/config.toml
+
+      - name: Install cross-compilation tools (Linux ppc64 big-endian)
+        if: matrix.target == 'powerpc64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-powerpc64-linux-gnu
+
+      - name: Configure cross-compilation (Linux ppc64 big-endian)
+        if: matrix.target == 'powerpc64-unknown-linux-gnu'
+        run: |
+          echo '[target.powerpc64-unknown-linux-gnu]' >> ~/.cargo/config.toml
+          echo 'linker = "powerpc64-linux-gnu-gcc"' >> ~/.cargo/config.toml
 
       - name: Install cross-compilation tools (Linux riscv64)
         if: matrix.target == 'riscv64gc-unknown-linux-gnu'
