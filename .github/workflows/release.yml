@@ -110,6 +110,17 @@ jobs:
           - target: powerpc64-unknown-linux-gnu
             os: ubuntu-latest
             archive: tar.xz
+          # Unlike every other *-unknown-linux-musl target here, big-endian
+          # powerpc64-unknown-linux-musl does not default to a statically-linked
+          # CRT in upstream rustc (confirmed via `rustc --print cfg`), so without
+          # forcing it the binary dynamically links against musl and fails to
+          # run at all on a system that doesn't have musl installed - verified
+          # on real big-endian POWER9 hardware (glibc userland, no musl):
+          # "cannot execute: required file not found". +crt-static fixes it.
+          - target: powerpc64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.xz
+            rustflags: -C target-feature=+crt-static
           - target: x86_64-unknown-freebsd
             os: ubuntu-latest
             archive: tar.xz
@@ -215,6 +226,25 @@ jobs:
           echo '[target.powerpc64-unknown-linux-gnu]' >> ~/.cargo/config.toml
           echo 'linker = "powerpc64-linux-gnu-gcc"' >> ~/.cargo/config.toml
 
+      - name: Install cross-compilation tools (Linux ppc64 big-endian musl)
+        if: matrix.target == 'powerpc64-unknown-linux-musl'
+        run: |
+          TOOLCHAIN_NAME="powerpc64-power8--musl--stable-2025.08-1"
+          TOOLCHAIN_URL="https://toolchains.bootlin.com/downloads/releases/toolchains/powerpc64-power8/tarballs/${TOOLCHAIN_NAME}.tar.xz"
+          CHECKSUM_URL="https://toolchains.bootlin.com/downloads/releases/toolchains/powerpc64-power8/tarballs/${TOOLCHAIN_NAME}.sha256"
+          curl -sSL --max-time 300 -o "${TOOLCHAIN_NAME}.tar.xz" "$TOOLCHAIN_URL"
+          curl -sSL --max-time 30 -o "${TOOLCHAIN_NAME}.sha256" "$CHECKSUM_URL"
+          sha256sum -c "${TOOLCHAIN_NAME}.sha256"
+          tar xf "${TOOLCHAIN_NAME}.tar.xz"
+          rm -f "${TOOLCHAIN_NAME}.tar.xz" "${TOOLCHAIN_NAME}.sha256"
+          echo "$PWD/${TOOLCHAIN_NAME}/bin" >> $GITHUB_PATH
+
+      - name: Configure cross-compilation (Linux ppc64 big-endian musl)
+        if: matrix.target == 'powerpc64-unknown-linux-musl'
+        run: |
+          echo '[target.powerpc64-unknown-linux-musl]' >> ~/.cargo/config.toml
+          echo 'linker = "powerpc64-buildroot-linux-musl-gcc"' >> ~/.cargo/config.toml
+
       - name: Install cross-compilation tools (Linux riscv64)
         if: matrix.target == 'riscv64gc-unknown-linux-gnu'
         run: |
@@ -256,6 +286,8 @@ jobs:
 
       - name: Build release binary
         if: matrix.use_cross != true
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Build release binary (cross)
