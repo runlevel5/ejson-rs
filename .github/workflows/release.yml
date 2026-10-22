@@ -314,9 +314,9 @@ jobs:
           path: ejson-${{ needs.check-version.outputs.version }}-${{ matrix.target }}.${{ matrix.archive }}
 
   # Build a source tarball with dependencies vendored in, for the Fedora RPM
-  # spec. It builds fully offline against this instead of using
-  # cargo-rpm-macros' usual "resolve against the system crate registry"
-  # mode. See build/rpm/ejson.spec and .copr/Makefile.
+  # built in the tle/power COPR (ejson/ejson.spec in
+  # https://github.com/runlevel5/fedora-ppc64). It builds fully offline
+  # against this instead of resolving against Fedora's packaged crates.
   vendor-tarball:
     name: Vendored Source Tarball
     needs: check-version
