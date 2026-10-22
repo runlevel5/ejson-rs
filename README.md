@@ -45,6 +45,15 @@ brew install ejson
 
 This installs the same prebuilt binary published to [Releases](https://github.com/runlevel5/ejson-rs/releases) — no compiler needed.
 
+### Fedora (COPR)
+
+ejson is packaged in the [tle/power](https://copr.fedorainfracloud.org/coprs/tle/power/) COPR repository:
+
+```bash
+sudo dnf copr enable tle/power
+sudo dnf install ejson
+```
+
 ### Build from Source
 
 ```bash
@@ -54,7 +63,7 @@ cargo build --release
 cp ./target/release/ejson ~/.local/bin/
 ```
 
-> **Note:** As of July 2026, there is no Deb package yet. A Fedora RPM spec lives in `build/rpm/`. Contributions welcome!
+> **Note:** As of July 2026, there is no Deb package yet. Contributions welcome!
 
 ## Quick Start
 
