@@ -93,7 +93,8 @@ pub enum EjsonError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("couldn't read key file")]
+    /// The message says which key (by public key prefix) and why.
+    #[error("{0}")]
     KeyFileError(String),
 
     #[error("invalid private key")]
@@ -784,19 +785,25 @@ fn read_private_key_from_disk(
 
     // Don't include the full path in messages to avoid information disclosure
     let prefix: String = key_id.chars().take(8).collect();
-    let key_file_error = || {
+    let key_file_error = |reason: &dyn std::fmt::Display| {
         EjsonError::KeyFileError(format!(
-            "key file for public key {prefix}... not found or unreadable"
+            "couldn't read key file for public key {prefix}...: {reason}"
         ))
     };
 
     let (file, metadata) = match open_regular_file(&key_path, MAX_KEY_FILE_SIZE) {
         Ok(opened) => opened,
         Err(e @ (EjsonError::InvalidPath(_) | EjsonError::FileTooLarge)) => return Err(e),
-        Err(_) => return Err(key_file_error()),
+        Err(EjsonError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(key_file_error(&"not found in keydir"));
+        }
+        // Report the kind of failure (e.g. "permission denied") but not the
+        // OS error text, which can include the path.
+        Err(EjsonError::Io(e)) => return Err(key_file_error(&e.kind())),
+        Err(_) => return Err(key_file_error(&"unreadable")),
     };
     let data = read_to_end_limited(file, MAX_KEY_FILE_SIZE, metadata.len())?;
-    let contents = String::from_utf8(data).map_err(|_| key_file_error())?;
+    let contents = String::from_utf8(data).map_err(|_| key_file_error(&"not valid UTF-8 text"))?;
 
     #[cfg(unix)]
     {
@@ -1181,6 +1188,60 @@ secret: "my secret"
         let out = String::from_utf8(out).unwrap();
         assert!(out.contains("my secret"));
         assert!(out.contains(&pub_hex));
+    }
+
+    #[test]
+    fn test_missing_key_file_error_names_the_key() {
+        let keydir = TempDir::new().unwrap();
+        let pubkey = keys::PublicKey::Legacy([0xab; 32]);
+
+        let err = read_private_key_from_disk(&pubkey, keydir.path().to_str().unwrap()).unwrap_err();
+        assert!(matches!(err, EjsonError::KeyFileError(_)));
+
+        let msg = err.to_string();
+        assert_eq!(
+            msg,
+            "couldn't read key file for public key abababab...: not found in keydir"
+        );
+        // The keydir path must not leak into the message.
+        assert!(!msg.contains(keydir.path().to_str().unwrap()));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_unreadable_key_file_error_gives_the_reason() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let keydir = TempDir::new().unwrap();
+        let pubkey = keys::PublicKey::Legacy([0xab; 32]);
+        let key_path = keydir.path().join(pubkey.key_id());
+        fs::write(&key_path, "00").unwrap();
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Root ignores file permissions, so there is nothing to observe.
+        if File::open(&key_path).is_ok() {
+            return;
+        }
+
+        let msg = read_private_key_from_disk(&pubkey, keydir.path().to_str().unwrap())
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            msg,
+            "couldn't read key file for public key abababab...: permission denied"
+        );
+    }
+
+    #[test]
+    fn test_non_utf8_key_file_error_gives_the_reason() {
+        let keydir = TempDir::new().unwrap();
+        let pubkey = keys::PublicKey::Legacy([0xab; 32]);
+        fs::write(keydir.path().join(pubkey.key_id()), [0xff, 0xfe]).unwrap();
+
+        let msg = read_private_key_from_disk(&pubkey, keydir.path().to_str().unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(msg.ends_with(": not valid UTF-8 text"), "{msg}");
     }
 
     #[test]
