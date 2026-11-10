@@ -59,6 +59,29 @@ jobs:
       - name: Run Clippy
         run: cargo clippy -- -D warnings
 
+  # `ejson env` output is meant to be eval'd. Check that adversarial values
+  # round-trip exactly, and can't inject commands, in every supported shell,
+  # including fish evaluating POSIX output (what `--shell auto` gives fish).
+  shell-roundtrip:
+    name: Shell round-trip
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - name: Install shells
+        run: sudo apt-get update && sudo apt-get install -y dash zsh fish
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Round-trip values through ejson env
+        run: python3 -I tests/shell_roundtrip.py target/release/ejson "$RUNNER_TEMP/shell-roundtrip"
+
   fmt:
     name: Format
     runs-on: ubuntu-latest

@@ -88,11 +88,16 @@ Shell syntax to emit. One of:
 .RS
 .IP \(bu 2
 .B auto
-(default) \- detect the running shell via the
+(default) \- emit fish syntax if the
 .B FISH_VERSION
-environment variable, which fish sets in its own process. Falls back to
-.B posix
-if not set.
+environment variable is set, otherwise
+.BR posix .
+Fish does not export
+.BR FISH_VERSION ,
+so under fish this normally selects
+.BR posix ,
+which fish also accepts. Values are quoted so that they read back
+identically in POSIX shells and fish, whichever syntax is emitted.
 .IP \(bu 2
 .B posix
 \- always emit
@@ -186,7 +191,7 @@ postgres://localhost/myapp
 .fi
 .RE
 .PP
-Source directly into a fish shell (auto-detected, no flag needed):
+Source directly into a fish shell (no flag needed):
 .RS
 .nf
 $ eval (ejson env secrets.ejson)

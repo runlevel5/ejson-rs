@@ -17,7 +17,8 @@ use zeroize::Zeroizing;
 /// Which shell syntax to emit environment variable assignments in.
 #[derive(ValueEnum, Clone, Copy, Debug, Default)]
 enum ShellArg {
-    /// Detect the running shell from the environment (checks `$FISH_VERSION`).
+    /// Fish syntax if `$FISH_VERSION` is set, otherwise POSIX. Fish doesn't
+    /// export it, so under fish this is usually POSIX, which fish also accepts.
     #[default]
     Auto,
     /// POSIX-compatible shells (bash, zsh, sh, ...): `export KEY='value'`
