@@ -46,7 +46,7 @@ hex = "0.4"
 thiserror = "2.0"
 
 # File locking
-fs4 = "0.13"
+fs4 = "1.1"
 
 # Parallelism (optional)
 rayon = { version = "1.10", optional = true }
