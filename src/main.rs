@@ -13,7 +13,7 @@ use std::process;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use ejson::env::{ExportStyle, Shell, read_and_export_env};
-use ejson::{GeneratedKeypair, KeySource, Scheme};
+use ejson::{GeneratedKeypair, KeySource, Scheme, UnderscorePrefix};
 use zeroize::Zeroizing;
 
 /// Which shell syntax to emit environment variable assignments in.
@@ -380,14 +380,12 @@ fn decrypt_action(
 ) -> Result<(), CliError> {
     let stdin_key = key_from_stdin_if(key_from_stdin)?;
 
-    let decrypted = Zeroizing::new(
-        ejson::decrypt_file(
-            file,
-            key_source(keydir, stdin_key.as_ref()),
-            trim_underscore_prefix,
-        )
-        .map_err(CliError::Decrypt)?,
-    );
+    let decrypted = ejson::decrypt_file(
+        file,
+        key_source(keydir, stdin_key.as_ref()),
+        underscore_prefix(trim_underscore_prefix),
+    )
+    .map_err(CliError::Decrypt)?;
 
     if let Some(out_path) = output {
         // Owner-only, written atomically, and no partial copy left behind on
@@ -407,6 +405,15 @@ fn decrypt_action(
 /// `Zeroizing` so it is wiped from memory on drop.
 fn key_from_stdin_if(key_from_stdin: bool) -> Result<Option<Zeroizing<String>>, CliError> {
     key_from_stdin.then(read_key_from_stdin).transpose()
+}
+
+/// The library's form of the `--trim-underscore-prefix` flag.
+fn underscore_prefix(trim: bool) -> UnderscorePrefix {
+    if trim {
+        UnderscorePrefix::Trim
+    } else {
+        UnderscorePrefix::Keep
+    }
 }
 
 /// Use the key from stdin if there is one, otherwise look it up in the keydir.
@@ -455,7 +462,7 @@ fn env_action(
     read_and_export_env(
         file,
         key_source(keydir, stdin_key.as_ref()),
-        trim_underscore_prefix,
+        underscore_prefix(trim_underscore_prefix),
         shell,
         style,
         &mut stdout,

@@ -13,7 +13,7 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::typed::DecryptedContent;
-use crate::{EjsonError, KeySource};
+use crate::{EjsonError, KeySource, UnderscorePrefix};
 use thiserror::Error;
 use zeroize::Zeroize;
 
@@ -203,9 +203,9 @@ pub fn extract_env(content: &DecryptedContent) -> Result<SecretEnvMap, EnvError>
 pub fn read_and_extract_env<P: AsRef<Path>>(
     file_path: P,
     key: KeySource<'_>,
-    trim_underscore_prefix: bool,
+    underscore_prefix: UnderscorePrefix,
 ) -> Result<SecretEnvMap, EnvError> {
-    let content = crate::decrypt_file_typed(file_path, key, trim_underscore_prefix)?;
+    let content = crate::decrypt_file_typed(file_path, key, underscore_prefix)?;
 
     extract_env(&content)
 }
@@ -219,12 +219,12 @@ pub fn read_and_extract_env<P: AsRef<Path>>(
 pub fn read_and_export_env<P: AsRef<Path>, W: Write>(
     file_path: P,
     key: KeySource<'_>,
-    trim_underscore_prefix: bool,
+    underscore_prefix: UnderscorePrefix,
     shell: Shell,
     style: ExportStyle,
     output: &mut W,
 ) -> Result<(), EnvError> {
-    let env_values = match read_and_extract_env(&file_path, key, trim_underscore_prefix) {
+    let env_values = match read_and_extract_env(&file_path, key, underscore_prefix) {
         Ok(values) => values,
         Err(e) if is_env_error(&e) => SecretEnvMap::new(),
         Err(e) => return Err(e),
@@ -652,7 +652,7 @@ mod tests {
         let err = read_and_export_env(
             "does-not-exist.ejson",
             KeySource::keydir("/nonexistent"),
-            false,
+            UnderscorePrefix::Keep,
             Shell::Posix,
             ExportStyle::Exported,
             &mut output,
