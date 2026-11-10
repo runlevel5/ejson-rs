@@ -238,7 +238,8 @@ fn read_file_with_lock(path: &Path) -> Result<Vec<u8>, EjsonError> {
 /// This function assumes JSON format. For format detection based on file extension,
 /// use `encrypt_file_in_place`.
 pub fn encrypt<R: Read, W: Write>(mut input: R, mut output: W) -> Result<usize, EjsonError> {
-    let data = read_to_end_limited(&mut input, MAX_FILE_SIZE, 0)?;
+    // The input is plaintext: wipe it once it has been encrypted.
+    let data = Zeroizing::new(read_to_end_limited(&mut input, MAX_FILE_SIZE, 0)?);
 
     encrypt_data(&data, &mut output, FileFormat::Json)
 }
@@ -249,7 +250,8 @@ pub fn encrypt_with_format<R: Read, W: Write>(
     mut output: W,
     format: FileFormat,
 ) -> Result<usize, EjsonError> {
-    let data = read_to_end_limited(&mut input, MAX_FILE_SIZE, 0)?;
+    // The input is plaintext: wipe it once it has been encrypted.
+    let data = Zeroizing::new(read_to_end_limited(&mut input, MAX_FILE_SIZE, 0)?);
 
     encrypt_data(&data, &mut output, format)
 }
@@ -262,8 +264,9 @@ fn encrypt_data<W: Write>(
     // Get the appropriate handler for this format
     let handler = format.handler();
 
-    // Preprocess the data (e.g., collapse multiline strings for JSON)
-    let data = handler.preprocess(data)?;
+    // Preprocess the data (e.g., collapse multiline strings for JSON). This is
+    // another copy of the plaintext, so it is wiped when dropped.
+    let data = Zeroizing::new(handler.preprocess(data)?);
 
     // Extract the public key and select the encryption scheme from it.
     let pubkey_string = handler.extract_public_key_string(&data)?;
@@ -297,14 +300,17 @@ pub fn encrypt_file_in_place<P: AsRef<Path>>(file_path: P) -> Result<usize, Ejso
     // Replace the symlink's target, not the symlink itself.
     let file_path = &fs::canonicalize(file_path)?;
 
+    // The file contents are (at least partly) plaintext: wipe our copy once
+    // it has been encrypted.
     let (file, metadata, data) = lock_and_read_for_update(file_path)?;
+    let data = Zeroizing::new(data);
 
     // Encrypt
     let mut output = Vec::new();
     let size = encrypt_data(&data, &mut output, format)?;
 
     // Nothing new to encrypt: leave the file untouched.
-    if output != data {
+    if output != *data {
         replace_file_atomically(file_path, &output, &metadata)?;
     }
 
@@ -745,27 +751,33 @@ fn find_private_key(
     keydir: &str,
     user_supplied_private_key: &str,
 ) -> Result<keys::PrivateKey, EjsonError> {
-    // Use Zeroizing to ensure the private key string is cleared from memory
-    let privkey_string: Zeroizing<String> = if user_supplied_private_key.is_empty() {
-        Zeroizing::new(read_private_key_from_disk(pubkey, keydir)?)
+    // A key read from disk is owned here and wiped on return; a key supplied
+    // by the caller is borrowed, not copied.
+    let from_disk: Zeroizing<String>;
+    let privkey_string: &str = if user_supplied_private_key.is_empty() {
+        from_disk = read_private_key_from_disk(pubkey, keydir)?;
+        &from_disk
     } else {
-        Zeroizing::new(user_supplied_private_key.to_string())
+        user_supplied_private_key
     };
 
     // Parse scheme-aware private key material for the given public key. Malformed key
     // material is surfaced as the stable `InvalidPrivateKey` error (preserving the prior
     // public contract); a well-formed key that doesn't match the public key surfaces as
     // the underlying crypto error.
-    keys::PrivateKey::parse_for_public(pubkey, &privkey_string).map_err(|e| match e {
+    keys::PrivateKey::parse_for_public(pubkey, privkey_string).map_err(|e| match e {
         CryptoError::InvalidKeyLength => EjsonError::InvalidPrivateKey,
         other => EjsonError::Crypto(other),
     })
 }
 
+/// Read the private key for `pubkey` from `keydir`.
+///
+/// The key, and the raw bytes it is decoded from, are wiped when dropped.
 fn read_private_key_from_disk(
     pubkey: &keys::PublicKey,
     keydir: &str,
-) -> Result<String, EjsonError> {
+) -> Result<Zeroizing<String>, EjsonError> {
     // The keydir filename is the key ID: for legacy keys this is the 64-char hex public
     // key (unchanged); for hybrid keys it is a 32-char derived ID.
     let key_id = pubkey.key_id();
@@ -802,8 +814,16 @@ fn read_private_key_from_disk(
         Err(EjsonError::Io(e)) => return Err(key_file_error(&e.kind())),
         Err(_) => return Err(key_file_error(&"unreadable")),
     };
-    let data = read_to_end_limited(file, MAX_KEY_FILE_SIZE, metadata.len())?;
-    let contents = String::from_utf8(data).map_err(|_| key_file_error(&"not valid UTF-8 text"))?;
+    let data = Zeroizing::new(read_to_end_limited(
+        file,
+        MAX_KEY_FILE_SIZE,
+        metadata.len(),
+    )?);
+    let contents = Zeroizing::new(
+        std::str::from_utf8(&data)
+            .map_err(|_| key_file_error(&"not valid UTF-8 text"))?
+            .to_owned(),
+    );
 
     #[cfg(unix)]
     {
