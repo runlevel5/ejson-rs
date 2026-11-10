@@ -164,9 +164,16 @@ pub enum EnvError {
     Write(#[source] std::io::Error),
 }
 
-/// Returns true if the error is due to the environment being missing or invalid.
-pub fn is_env_error(err: &EnvError) -> bool {
-    matches!(err, EnvError::NoEnv | EnvError::EnvNotMap)
+impl EnvError {
+    /// Whether the document simply has no usable `environment` section: the
+    /// key is absent ([`EnvError::NoEnv`]) or is not a map
+    /// ([`EnvError::EnvNotMap`]).
+    ///
+    /// Callers that treat "nothing to export" as success, as `ejson env` does,
+    /// can check this instead of matching on the variants.
+    pub fn is_missing_environment(&self) -> bool {
+        matches!(self, EnvError::NoEnv | EnvError::EnvNotMap)
+    }
 }
 
 /// Extracts environment values from decrypted content (JSON, YAML, or TOML).
@@ -226,7 +233,7 @@ pub fn read_and_export_env<P: AsRef<Path>, W: Write>(
 ) -> Result<(), EnvError> {
     let env_values = match read_and_extract_env(&file_path, key, underscore_prefix) {
         Ok(values) => values,
-        Err(e) if is_env_error(&e) => SecretEnvMap::new(),
+        Err(e) if e.is_missing_environment() => SecretEnvMap::new(),
         Err(e) => return Err(e),
     };
 
@@ -669,12 +676,17 @@ mod tests {
     }
 
     #[test]
-    fn test_is_env_error() {
-        assert!(is_env_error(&EnvError::NoEnv));
-        assert!(is_env_error(&EnvError::EnvNotMap));
-        assert!(!is_env_error(&EnvError::InvalidIdentifier(
-            "test".to_string()
-        )));
+    fn test_is_missing_environment() {
+        assert!(EnvError::NoEnv.is_missing_environment());
+        assert!(EnvError::EnvNotMap.is_missing_environment());
+
+        // Real failures are not "nothing to export".
+        assert!(!EnvError::InvalidIdentifier("a b".to_string()).is_missing_environment());
+        assert!(!EnvError::Ejson(EjsonError::FileTooLarge).is_missing_environment());
+        assert!(
+            !EnvError::Write(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+                .is_missing_environment()
+        );
     }
 
     #[test]
