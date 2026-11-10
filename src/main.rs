@@ -252,11 +252,7 @@ fn decrypt_action(
 ) -> Result<(), String> {
     // Use Zeroizing wrapper for private key to ensure it's cleared from memory
     let user_supplied_private_key: Zeroizing<String> = if key_from_stdin {
-        let mut stdin_content = Zeroizing::new(String::new());
-        io::stdin()
-            .read_to_string(&mut stdin_content)
-            .map_err(|e| format!("Failed to read from stdin: {e}"))?;
-        Zeroizing::new(stdin_content.trim().to_string())
+        read_key_from_stdin()?
     } else {
         Zeroizing::new(String::new())
     };
@@ -308,6 +304,22 @@ fn decrypt_action(
     Ok(())
 }
 
+/// Read a private key from stdin, refusing input larger than any real key.
+fn read_key_from_stdin() -> Result<Zeroizing<String>, String> {
+    let mut stdin_content = Zeroizing::new(String::new());
+    io::stdin()
+        .take(ejson::MAX_KEY_FILE_SIZE + 1)
+        .read_to_string(&mut stdin_content)
+        .map_err(|e| format!("Failed to read from stdin: {e}"))?;
+    if stdin_content.len() as u64 > ejson::MAX_KEY_FILE_SIZE {
+        return Err(format!(
+            "Private key on stdin is larger than {} bytes",
+            ejson::MAX_KEY_FILE_SIZE
+        ));
+    }
+    Ok(Zeroizing::new(stdin_content.trim().to_string()))
+}
+
 fn env_action(
     file: &Path,
     keydir: &str,
@@ -318,11 +330,7 @@ fn env_action(
 ) -> Result<(), String> {
     // Use Zeroizing wrapper for private key to ensure it's cleared from memory
     let user_supplied_private_key: Zeroizing<String> = if key_from_stdin {
-        let mut stdin_content = Zeroizing::new(String::new());
-        io::stdin()
-            .read_to_string(&mut stdin_content)
-            .map_err(|e| format!("Failed to read from stdin: {e}"))?;
-        Zeroizing::new(stdin_content.trim().to_string())
+        read_key_from_stdin()?
     } else {
         Zeroizing::new(String::new())
     };
