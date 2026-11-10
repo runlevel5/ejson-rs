@@ -97,6 +97,105 @@ struct InternalModulesArePrivate;
 #[cfg(all(doctest, feature = "unstable-internals"))]
 struct SecretFieldsArePrivate;
 
+/// The public enums that may gain variants, and `GeneratedKeypair`, are
+/// `#[non_exhaustive]`: code outside the crate must allow for additions.
+///
+/// A `match` without a wildcard arm does not compile:
+///
+/// ```compile_fail
+/// fn name(scheme: ejson::Scheme) -> &'static str {
+///     match scheme {
+///         ejson::Scheme::V1 => "v1",
+///         ejson::Scheme::V2 => "v2",
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// fn extension(format: ejson::FileFormat) -> &'static str {
+///     match format {
+///         ejson::FileFormat::Json => "ejson",
+///         ejson::FileFormat::Yaml => "eyaml",
+///         ejson::FileFormat::Toml => "etoml",
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// fn is_fish(shell: ejson::env::Shell) -> bool {
+///     match shell {
+///         ejson::env::Shell::Posix => false,
+///         ejson::env::Shell::Fish => true,
+///     }
+/// }
+/// ```
+///
+/// ```compile_fail
+/// fn uses_keydir(key: ejson::KeySource<'_>) -> bool {
+///     match key {
+///         ejson::KeySource::Keydir(_) => true,
+///         ejson::KeySource::PrivateKey(_) => false,
+///     }
+/// }
+/// ```
+///
+/// Nor does building a `GeneratedKeypair` by hand:
+///
+/// ```compile_fail
+/// let generated = ejson::generate_keypair(ejson::Scheme::V1);
+/// let _copy = ejson::GeneratedKeypair {
+///     scheme: generated.scheme,
+///     public_key: generated.public_key,
+///     private_key: generated.private_key,
+///     key_id: generated.key_id,
+/// };
+/// ```
+///
+/// With a wildcard arm, and reading fields instead of building the struct,
+/// the same code compiles:
+///
+/// ```
+/// fn name(scheme: ejson::Scheme) -> &'static str {
+///     match scheme {
+///         ejson::Scheme::V1 => "v1",
+///         ejson::Scheme::V2 => "v2",
+///         _ => "newer",
+///     }
+/// }
+/// fn extension(format: ejson::FileFormat) -> &'static str {
+///     match format {
+///         ejson::FileFormat::Json => "ejson",
+///         ejson::FileFormat::Yaml => "eyaml",
+///         ejson::FileFormat::Toml => "etoml",
+///         _ => "other",
+///     }
+/// }
+/// fn is_fish(shell: ejson::env::Shell) -> bool {
+///     match shell {
+///         ejson::env::Shell::Posix => false,
+///         ejson::env::Shell::Fish => true,
+///         _ => false,
+///     }
+/// }
+/// fn uses_keydir(key: ejson::KeySource<'_>) -> bool {
+///     match key {
+///         ejson::KeySource::Keydir(_) => true,
+///         ejson::KeySource::PrivateKey(_) => false,
+///         _ => false,
+///     }
+/// }
+///
+/// let generated = ejson::generate_keypair(ejson::Scheme::V1);
+/// let ejson::GeneratedKeypair { scheme, public_key, .. } = generated;
+/// assert_eq!(name(scheme), "v1");
+/// assert_eq!(public_key.len(), 64);
+/// assert_eq!(extension(ejson::FileFormat::Toml), "etoml");
+/// assert!(is_fish(ejson::env::Shell::Fish));
+/// assert!(uses_keydir(ejson::KeySource::keydir("/opt/ejson/keys")));
+/// ```
+#[cfg(doctest)]
+struct PublicTypesCanGrow;
+
 pub mod env;
 
 internal_modules!(
@@ -140,7 +239,11 @@ use zeroize::Zeroizing;
 /// let plaintext = ejson::decrypt_file("secrets.ejson", KeySource::PrivateKey(&private_key), UnderscorePrefix::Keep)?;
 /// # Ok::<(), ejson::EjsonError>(())
 /// ```
+///
+/// More sources may be added in a minor release, so a `match` on a
+/// `KeySource` needs a wildcard arm.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub enum KeySource<'a> {
     /// Read the key from this directory, from the file named after the
     /// document's public key (its key ID).

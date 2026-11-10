@@ -251,7 +251,11 @@ fn filtered_value(v: &str) -> (String, bool) {
 }
 
 /// Identifies the shell syntax to use when exporting environment variables.
+///
+/// More shells may be added in a minor release, so a `match` on a `Shell`
+/// needs a wildcard arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Shell {
     /// POSIX-compatible shells (bash, zsh, sh, dash, ...): `export KEY='value'`
     Posix,
