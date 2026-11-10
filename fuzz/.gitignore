@@ -1,0 +1,5 @@
+target
+# Grown by `cargo fuzz run`; the reviewed starting points are in seeds/.
+corpus
+artifacts
+coverage
