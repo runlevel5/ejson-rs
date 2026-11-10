@@ -317,16 +317,74 @@ pub enum EjsonError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
-    /// The private key file couldn't be read. The message says which key (by
-    /// public key prefix) and why.
-    #[error("{0}")]
-    KeyFile(String),
+    /// The private key file couldn't be read.
+    ///
+    /// The message names the key by the first characters of its ID, never by
+    /// the path of the keydir.
+    #[error("couldn't read key file for public key {}...: {reason}", key_id_prefix(.key_id))]
+    KeyFile {
+        /// The key ID, which is the file's name in the keydir: the hex public
+        /// key for `v1`, a 32-character derived ID for `v2`.
+        key_id: String,
+        reason: KeyFileReason,
+    },
 
     #[error("file too large (max {} bytes)", MAX_FILE_SIZE)]
     FileTooLarge,
 
     #[error("invalid path: {0}")]
-    InvalidPath(String),
+    InvalidPath(InvalidPathReason),
+}
+
+/// The first eight characters of a key ID, enough to recognise the key.
+fn key_id_prefix(key_id: &str) -> &str {
+    key_id
+        .char_indices()
+        .nth(8)
+        .map_or(key_id, |(end, _)| &key_id[..end])
+}
+
+/// Why a private key file couldn't be read. See [`EjsonError::KeyFile`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum KeyFileReason {
+    /// There is no file for this key in the keydir (or no such keydir).
+    NotFound,
+    /// The file is not UTF-8 text, so it can't be a key.
+    NotUtf8,
+    /// The file exists but couldn't be read. Only the kind of failure is
+    /// kept: the operating system's message can include the path.
+    Io(std::io::ErrorKind),
+}
+
+impl std::fmt::Display for KeyFileReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => f.write_str("not found in keydir"),
+            Self::NotUtf8 => f.write_str("not valid UTF-8 text"),
+            Self::Io(kind) => write!(f, "{kind}"),
+        }
+    }
+}
+
+/// Why a path can't be used. See [`EjsonError::InvalidPath`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum InvalidPathReason {
+    #[error("path contains null bytes")]
+    NullByte,
+
+    /// The path is a directory, device, FIFO or socket (possibly through a
+    /// symlink).
+    #[error("path is not a regular file")]
+    NotRegularFile,
+
+    /// The key file resolves to somewhere outside the keydir.
+    #[error("key path escapes keydir")]
+    EscapesKeydir,
+
+    #[error("path has no file name")]
+    NoFileName,
 }
 
 /// Reject paths that can't be a usable input file: paths containing NUL
@@ -341,9 +399,7 @@ fn validate_path(path: &Path) -> Result<(), EjsonError> {
 
     // Reject paths with null bytes
     if path_str.contains('\0') {
-        return Err(EjsonError::InvalidPath(
-            "path contains null bytes".to_string(),
-        ));
+        return Err(EjsonError::InvalidPath(InvalidPathReason::NullByte));
     }
 
     // Reject anything that isn't a regular file. This follows symlinks, so a
@@ -356,9 +412,7 @@ fn validate_path(path: &Path) -> Result<(), EjsonError> {
         let is_special = metadata.is_dir() || is_device_fifo_or_socket(&metadata);
 
         if is_special {
-            return Err(EjsonError::InvalidPath(
-                "path is not a regular file".to_string(),
-            ));
+            return Err(EjsonError::InvalidPath(InvalidPathReason::NotRegularFile));
         }
     }
 
@@ -391,9 +445,7 @@ fn open_regular_file(path: &Path, max_size: u64) -> Result<(File, fs::Metadata),
     let file = File::open(path)?;
     let metadata = file.metadata()?;
     if !metadata.is_file() {
-        return Err(EjsonError::InvalidPath(
-            "path is not a regular file".to_string(),
-        ));
+        return Err(EjsonError::InvalidPath(InvalidPathReason::NotRegularFile));
     }
     if metadata.len() > max_size {
         return Err(EjsonError::FileTooLarge);
@@ -652,7 +704,7 @@ fn write_via_temp_file(
     };
     let name = path
         .file_name()
-        .ok_or_else(|| EjsonError::InvalidPath("path has no file name".to_string()))?
+        .ok_or(EjsonError::InvalidPath(InvalidPathReason::NoFileName))?
         .to_string_lossy();
 
     let (temp_path, mut temp) = create_temp_file(parent, &name)?;
@@ -936,29 +988,25 @@ fn read_private_key_from_disk(
         (fs::canonicalize(keydir), fs::canonicalize(&key_path))
         && !canonical_key_path.starts_with(&canonical_keydir)
     {
-        return Err(EjsonError::InvalidPath(
-            "key path escapes keydir".to_string(),
-        ));
+        return Err(EjsonError::InvalidPath(InvalidPathReason::EscapesKeydir));
     }
 
-    // Don't include the full path in messages to avoid information disclosure
-    let prefix: String = key_id.chars().take(8).collect();
-    let key_file_error = |reason: &dyn std::fmt::Display| {
-        EjsonError::KeyFile(format!(
-            "couldn't read key file for public key {prefix}...: {reason}"
-        ))
+    // The error (and the warning below) name the key, never the keydir path.
+    let key_file_error = |reason: KeyFileReason| EjsonError::KeyFile {
+        key_id: key_id.clone(),
+        reason,
     };
 
     let (file, metadata) = match open_regular_file(&key_path, MAX_KEY_FILE_SIZE) {
         Ok(opened) => opened,
         Err(e @ (EjsonError::InvalidPath(_) | EjsonError::FileTooLarge)) => return Err(e),
         Err(EjsonError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Err(key_file_error(&"not found in keydir"));
+            return Err(key_file_error(KeyFileReason::NotFound));
         }
         // Report the kind of failure (e.g. "permission denied") but not the
         // OS error text, which can include the path.
-        Err(EjsonError::Io(e)) => return Err(key_file_error(&e.kind())),
-        Err(_) => return Err(key_file_error(&"unreadable")),
+        Err(EjsonError::Io(e)) => return Err(key_file_error(KeyFileReason::Io(e.kind()))),
+        Err(_) => return Err(key_file_error(KeyFileReason::Io(std::io::ErrorKind::Other))),
     };
     let data = Zeroizing::new(read_to_end_limited(
         file,
@@ -967,7 +1015,7 @@ fn read_private_key_from_disk(
     )?);
     let contents = Zeroizing::new(
         std::str::from_utf8(&data)
-            .map_err(|_| key_file_error(&"not valid UTF-8 text"))?
+            .map_err(|_| key_file_error(KeyFileReason::NotUtf8))?
             .to_owned(),
     );
 
@@ -976,8 +1024,9 @@ fn read_private_key_from_disk(
         use std::os::unix::fs::PermissionsExt;
         if let Some(problem) = key_file_mode_problem(metadata.permissions().mode()) {
             log::warn!(
-                "key file for public key {prefix}... is {problem}; \
-                 restrict it with `chmod 440` (or `chmod 400`)"
+                "key file for public key {}... is {problem}; \
+                 restrict it with `chmod 440` (or `chmod 400`)",
+                key_id_prefix(&key_id)
             );
         }
     }
@@ -1494,7 +1543,11 @@ secret: "my secret"
         let pubkey = keys::PublicKey::Legacy([0xab; 32]);
 
         let err = read_private_key_from_disk(&pubkey, keydir.path()).unwrap_err();
-        assert!(matches!(err, EjsonError::KeyFile(_)));
+        assert!(matches!(
+            &err,
+            EjsonError::KeyFile { key_id, reason: KeyFileReason::NotFound }
+                if *key_id == "ab".repeat(32)
+        ));
 
         let msg = err.to_string();
         assert_eq!(
@@ -1521,11 +1574,16 @@ secret: "my secret"
             return;
         }
 
-        let msg = read_private_key_from_disk(&pubkey, keydir.path())
-            .unwrap_err()
-            .to_string();
+        let err = read_private_key_from_disk(&pubkey, keydir.path()).unwrap_err();
+        assert!(matches!(
+            err,
+            EjsonError::KeyFile {
+                reason: KeyFileReason::Io(std::io::ErrorKind::PermissionDenied),
+                ..
+            }
+        ));
         assert_eq!(
-            msg,
+            err.to_string(),
             "couldn't read key file for public key abababab...: permission denied"
         );
     }
@@ -1536,10 +1594,18 @@ secret: "my secret"
         let pubkey = keys::PublicKey::Legacy([0xab; 32]);
         fs::write(keydir.path().join(pubkey.key_id()), [0xff, 0xfe]).unwrap();
 
-        let msg = read_private_key_from_disk(&pubkey, keydir.path())
-            .unwrap_err()
-            .to_string();
-        assert!(msg.ends_with(": not valid UTF-8 text"), "{msg}");
+        let err = read_private_key_from_disk(&pubkey, keydir.path()).unwrap_err();
+        assert!(matches!(
+            err,
+            EjsonError::KeyFile {
+                reason: KeyFileReason::NotUtf8,
+                ..
+            }
+        ));
+        assert_eq!(
+            err.to_string(),
+            "couldn't read key file for public key abababab...: not valid UTF-8 text"
+        );
     }
 
     #[test]
@@ -1744,6 +1810,61 @@ secret: "my secret"
         // A fresh handle sees the new file.
         let reopened = File::open(&path).unwrap();
         assert!(is_same_file(&reopened, &path).unwrap());
+    }
+
+    #[test]
+    fn test_structured_error_reasons_and_messages() {
+        // Messages are unchanged from when these carried pre-formatted text.
+        for (reason, message) in [
+            (
+                InvalidPathReason::NullByte,
+                "invalid path: path contains null bytes",
+            ),
+            (
+                InvalidPathReason::NotRegularFile,
+                "invalid path: path is not a regular file",
+            ),
+            (
+                InvalidPathReason::EscapesKeydir,
+                "invalid path: key path escapes keydir",
+            ),
+            (
+                InvalidPathReason::NoFileName,
+                "invalid path: path has no file name",
+            ),
+        ] {
+            assert_eq!(EjsonError::InvalidPath(reason).to_string(), message);
+        }
+
+        let key_file = |key_id: &str, reason| EjsonError::KeyFile {
+            key_id: key_id.to_string(),
+            reason,
+        };
+        assert_eq!(
+            key_file("0123456789abcdef", KeyFileReason::NotFound).to_string(),
+            "couldn't read key file for public key 01234567...: not found in keydir"
+        );
+        // A short or non-ASCII key ID doesn't panic when shortened.
+        assert_eq!(
+            key_file("abc", KeyFileReason::NotUtf8).to_string(),
+            "couldn't read key file for public key abc...: not valid UTF-8 text"
+        );
+        assert_eq!(key_id_prefix("ééééééééé-tail"), "éééééééé");
+
+        // The reasons can be matched on.
+        let temp_dir = TempDir::new().unwrap();
+        assert!(matches!(
+            open_regular_file(temp_dir.path(), MAX_FILE_SIZE),
+            Err(EjsonError::InvalidPath(InvalidPathReason::NotRegularFile))
+        ));
+        assert!(matches!(
+            validate_path(Path::new("/tmp/nul\0byte.ejson")),
+            Err(EjsonError::InvalidPath(InvalidPathReason::NullByte))
+        ));
+        assert!(matches!(
+            write_private_file_atomically("/", b"x"),
+            Err(EjsonError::InvalidPath(InvalidPathReason::NoFileName))
+        ));
     }
 
     #[test]
