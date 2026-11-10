@@ -31,10 +31,23 @@ pub enum JsonError {
     #[error("invalid json")]
     InvalidJson,
 
+    /// Objects and arrays are nested more than [`MAX_DEPTH`] levels deep.
+    #[error("json is nested more than {MAX_DEPTH} levels deep")]
+    NestingTooDeep,
+
     /// Encrypting or decrypting a value failed; the cause is the `source`.
     #[error("action failed: {0}")]
     ActionFailed(#[source] CryptoError),
 }
+
+/// Maximum nesting depth of objects and arrays that [`Walker`] accepts.
+///
+/// The walker recurses once per level, so without a limit a document made of
+/// a very long run of `[` overflows the stack. This is the deepest nesting
+/// `serde_json` accepts (its recursion limit of 128 allows 127 levels), which
+/// ejson's own encrypt and decrypt paths already apply when they parse the
+/// document first.
+pub const MAX_DEPTH: usize = 127;
 
 /// Extract the raw `_public_key` string value from an EJSON document.
 ///
@@ -147,7 +160,7 @@ where
         let mut output = Vec::with_capacity(data.len() * 5 / 2);
         let mut i = 0;
 
-        self.walk_value(data, &mut i, &mut output, false)?;
+        self.walk_value(data, &mut i, &mut output, false, 0)?;
 
         // Append any trailing whitespace/content
         while i < data.len() {
@@ -164,6 +177,7 @@ where
         i: &mut usize,
         output: &mut Vec<u8>,
         is_comment: bool,
+        depth: usize,
     ) -> Result<(), JsonError> {
         self.skip_whitespace(data, i, output);
 
@@ -171,9 +185,14 @@ where
             return Ok(());
         }
 
+        // `depth` is the number of objects and arrays this value is inside.
+        if matches!(data[*i], b'{' | b'[') && depth >= MAX_DEPTH {
+            return Err(JsonError::NestingTooDeep);
+        }
+
         match data[*i] {
-            b'{' => self.walk_object(data, i, output)?,
-            b'[' => self.walk_array(data, i, output, is_comment)?,
+            b'{' => self.walk_object(data, i, output, depth + 1)?,
+            b'[' => self.walk_array(data, i, output, is_comment, depth + 1)?,
             b'"' => self.walk_string(data, i, output, is_comment)?,
             _ => self.walk_literal(data, i, output)?,
         }
@@ -186,6 +205,7 @@ where
         data: &[u8],
         i: &mut usize,
         output: &mut Vec<u8>,
+        depth: usize,
     ) -> Result<(), JsonError> {
         // Output '{'
         output.push(data[*i]);
@@ -230,7 +250,7 @@ where
             *i += 1;
 
             // Parse value
-            self.walk_value(data, i, output, is_comment)?;
+            self.walk_value(data, i, output, is_comment, depth)?;
 
             self.skip_whitespace(data, i, output);
 
@@ -257,6 +277,7 @@ where
         i: &mut usize,
         output: &mut Vec<u8>,
         is_comment: bool,
+        depth: usize,
     ) -> Result<(), JsonError> {
         // Output '['
         output.push(data[*i]);
@@ -272,7 +293,7 @@ where
         }
 
         loop {
-            self.walk_value(data, i, output, is_comment)?;
+            self.walk_value(data, i, output, is_comment, depth)?;
 
             self.skip_whitespace(data, i, output);
 
@@ -558,6 +579,10 @@ impl From<JsonError> for FormatError {
                 format: "JSON",
                 message: "invalid JSON syntax".to_string(),
             },
+            JsonError::NestingTooDeep => FormatError::InvalidSyntax {
+                format: "JSON",
+                message: err.to_string(),
+            },
             JsonError::ActionFailed(source) => FormatError::ActionFailed(source),
         }
     }
@@ -656,6 +681,57 @@ mod tests {
             br#"["_public_key", "_public_key"]"#
         ));
         assert!(!has_duplicate_public_key(b"not json"));
+    }
+
+    fn nested(open: &str, close: &str, levels: usize) -> String {
+        format!("{}{}", open.repeat(levels), close.repeat(levels))
+    }
+
+    #[test]
+    fn test_walker_depth_limit_matches_serde_json() {
+        let walker = Walker::new(|v: &[u8]| Ok(v.to_vec()));
+
+        // The walker accepts exactly the nesting depths serde_json accepts,
+        // for arrays, objects and a mix, so the limit changes nothing for
+        // documents that ejson parses with serde_json first.
+        for (open, close) in [("[", "]"), (r#"{"a":"#, "}"), (r#"[{"a":"#, "}]")] {
+            let per_level = open.matches(['[', '{']).count();
+            for levels in [1, 10, 63, 64, 126, 127, 128, 129, 200] {
+                let doc = nested(open, close, levels).replace(":}", ":1}");
+                let serde_ok = serde_json::from_str::<Value>(&doc).is_ok();
+                let walked = walker.walk(doc.as_bytes());
+
+                assert_eq!(walked.is_ok(), serde_ok, "{open} x {levels}");
+                assert_eq!(
+                    serde_ok,
+                    levels * per_level <= MAX_DEPTH,
+                    "{open} x {levels}"
+                );
+                if !serde_ok {
+                    assert!(matches!(walked, Err(JsonError::NestingTooDeep)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_walker_rejects_deep_nesting_without_overflowing_the_stack() {
+        let walker = Walker::new(|v: &[u8]| Ok(v.to_vec()));
+
+        // Unclosed, so serde_json would reject it for a different reason; the
+        // point is that the walker returns instead of recursing a million deep.
+        for doc in ["[".repeat(1_000_000), r#"{"a":"#.repeat(1_000_000)] {
+            assert!(matches!(
+                walker.walk(doc.as_bytes()),
+                Err(JsonError::NestingTooDeep)
+            ));
+        }
+
+        let err = FormatError::from(JsonError::NestingTooDeep);
+        assert_eq!(
+            err.to_string(),
+            "invalid JSON syntax: json is nested more than 127 levels deep"
+        );
     }
 
     #[test]
