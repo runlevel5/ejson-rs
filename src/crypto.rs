@@ -324,7 +324,7 @@ mod tests {
     #[test]
     fn test_keypair_debug_redacts_private_key() {
         let kp = Keypair::generate().unwrap();
-        let debug_output = format!("{:?}", kp);
+        let debug_output = format!("{kp:?}");
         assert!(debug_output.contains("[REDACTED]"));
         assert!(!debug_output.contains(kp.private_hex().as_str()));
     }

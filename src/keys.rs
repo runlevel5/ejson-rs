@@ -8,6 +8,8 @@
 //! [`AnyEncrypter`]/[`AnyDecrypter`] dispatchers used by the top-level encrypt/decrypt
 //! flows, so the rest of the crate stays scheme-agnostic.
 
+use std::fmt;
+
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::crypto::{CryptoError, Decrypter, Encrypter, KeyBytes, Keypair};
@@ -44,6 +46,19 @@ pub fn normalize_scheme(scheme: &str) -> String {
 pub enum PublicKey {
     Legacy(KeyBytes),
     Hybrid(Box<HybridPublicKey>),
+}
+
+impl fmt::Debug for PublicKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let scheme = match self {
+            PublicKey::Legacy(_) => SCHEME_LEGACY,
+            PublicKey::Hybrid(_) => SCHEME_HYBRID,
+        };
+        f.debug_struct("PublicKey")
+            .field("scheme", &scheme)
+            .field("key_id", &self.key_id())
+            .finish()
+    }
 }
 
 impl PublicKey {
@@ -100,6 +115,20 @@ pub enum PrivateKey {
     Hybrid(Box<HybridPrivateKey>),
 }
 
+// Never prints key material.
+impl fmt::Debug for PrivateKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let scheme = match self {
+            PrivateKey::Legacy(_) => SCHEME_LEGACY,
+            PrivateKey::Hybrid(_) => SCHEME_HYBRID,
+        };
+        f.debug_struct("PrivateKey")
+            .field("scheme", &scheme)
+            .field("key", &"[REDACTED]")
+            .finish()
+    }
+}
+
 impl PrivateKey {
     /// Parse private key material for the given public key, verifying the scheme matches.
     pub fn parse_for_public(public: &PublicKey, data: &str) -> Result<Self, CryptoError> {
@@ -113,6 +142,7 @@ impl PrivateKey {
 }
 
 /// Scheme-tagged encrypter.
+#[derive(Debug)]
 pub enum AnyEncrypter {
     Legacy(Encrypter),
     Hybrid(Box<HybridEncrypter>),
@@ -145,6 +175,7 @@ impl AnyEncrypter {
 }
 
 /// Scheme-tagged decrypter.
+#[derive(Debug)]
 pub enum AnyDecrypter {
     Legacy(Decrypter),
     Hybrid(Box<HybridDecrypter>),
@@ -258,6 +289,42 @@ mod tests {
         assert_eq!(pk.version(), VERSION_HYBRID);
         assert_eq!(pk.key_id(), key_id);
         PrivateKey::parse_for_public(&pk, &private).unwrap();
+    }
+
+    #[test]
+    fn test_debug_output_never_contains_private_keys() {
+        for scheme in ["v1", "v2"] {
+            let (public, private, key_id) = generate_keypair_for_scheme(scheme).unwrap();
+            let pk = PublicKey::parse(&public).unwrap();
+            let privk = PrivateKey::parse_for_public(&pk, &private).unwrap();
+
+            // Every hex or base64 run of the private key file that is long
+            // enough to be key material, and isn't part of the public key.
+            let secrets: Vec<&str> = private
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '+' && c != '/')
+                .filter(|part| part.len() >= 32 && !public.contains(part) && *part != key_id)
+                .collect();
+            assert!(!secrets.is_empty());
+
+            let private_debug = format!("{privk:?}");
+            let decrypter = AnyDecrypter::new(&pk, privk).unwrap();
+            let encrypter = AnyEncrypter::for_public_key(&pk).unwrap();
+            let outputs = [
+                private_debug,
+                format!("{decrypter:?}"),
+                format!("{encrypter:?}"),
+                format!("{pk:?}"),
+            ];
+
+            for output in &outputs {
+                for secret in &secrets {
+                    assert!(!output.contains(secret), "{scheme}: leaked in {output}");
+                }
+            }
+            assert!(outputs[0].contains("[REDACTED]"));
+            assert!(outputs[1].contains("[REDACTED]"));
+            assert!(outputs[3].contains(&key_id));
+        }
     }
 
     #[test]

@@ -213,7 +213,10 @@ fn read_to_end_limited<R: Read>(
     max_size: u64,
     capacity: u64,
 ) -> Result<Vec<u8>, EjsonError> {
-    let mut data = Vec::with_capacity(capacity.min(max_size) as usize);
+    // Only a capacity hint: fall back to growing on demand if it doesn't fit
+    // in `usize`.
+    let capacity = usize::try_from(capacity.min(max_size)).unwrap_or(0);
+    let mut data = Vec::with_capacity(capacity);
     reader.take(max_size + 1).read_to_end(&mut data)?;
     if data.len() as u64 > max_size {
         return Err(EjsonError::FileTooLarge);
@@ -841,6 +844,7 @@ fn key_file_mode_problem(mode: u32) -> Option<&'static str> {
 
 /// Captures `log` records so tests can assert on the library's warnings.
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 pub(crate) mod test_log {
     use std::sync::{Mutex, Once};
 
@@ -1188,7 +1192,7 @@ secret: "my secret"
 
         let leftovers: Vec<_> = fs::read_dir(temp_dir.path())
             .unwrap()
-            .filter_map(|e| e.ok())
+            .filter_map(Result::ok)
             .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
             .collect();
         assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
@@ -1375,7 +1379,7 @@ secret: "my secret"
     fn test_oversized_key_file_is_rejected() {
         let keydir = TempDir::new().unwrap();
         let pubkey = keys::PublicKey::Legacy([7u8; 32]);
-        let big = vec![b'a'; MAX_KEY_FILE_SIZE as usize + 1];
+        let big = vec![b'a'; usize::try_from(MAX_KEY_FILE_SIZE).unwrap() + 1];
         fs::write(keydir.path().join(pubkey.key_id()), big).unwrap();
 
         assert!(matches!(

@@ -323,6 +323,14 @@ pub struct HybridEncrypter {
     peer_mlkem_ek: EncapsulationKey<MlKem768>,
 }
 
+impl fmt::Debug for HybridEncrypter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HybridEncrypter")
+            .field("peer", &self.peer)
+            .finish_non_exhaustive()
+    }
+}
+
 impl HybridEncrypter {
     pub fn new(peer: HybridPublicKey) -> Result<Self, CryptoError> {
         // Parse (and validate) the peer key material once, up front.
@@ -393,6 +401,17 @@ pub struct HybridDecrypter {
     mlkem_dk: DecapsulationKey<MlKem768>,
 }
 
+// Never prints key material.
+impl fmt::Debug for HybridDecrypter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HybridDecrypter")
+            .field("public", &self.public)
+            .field("x25519_private", &"[REDACTED]")
+            .field("mlkem_dk", &"[REDACTED]")
+            .finish()
+    }
+}
+
 impl HybridDecrypter {
     pub fn new(private: HybridPrivateKey) -> Self {
         let x25519_private = StaticSecret::from(private.x25519_private);
@@ -442,6 +461,14 @@ pub struct HybridBoxedMessage {
     pub mlkem_ciphertext: [u8; HYBRID_MLKEM_CIPHERTEXT_SIZE],
     pub nonce: [u8; NONCE_SIZE],
     pub box_data: Vec<u8>,
+}
+
+impl fmt::Debug for HybridBoxedMessage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HybridBoxedMessage")
+            .field("box_data", &format_args!("[{} bytes]", self.box_data.len()))
+            .finish_non_exhaustive()
+    }
 }
 
 impl HybridBoxedMessage {
@@ -534,6 +561,10 @@ fn derive_key(info: &[u8], x25519_shared: &[u8], mlkem_shared: &[u8]) -> Zeroizi
     let hk = Hkdf::<Sha256>::new(Some(HYBRID_KDF_SALT), &ikm);
     let mut key = Zeroizing::new([0u8; 32]);
     // expand only fails for absurd output lengths; 32 bytes always succeeds.
+    #[expect(
+        clippy::expect_used,
+        reason = "HKDF-SHA256 can always produce 32 bytes of output"
+    )]
     hk.expand(info, key.as_mut_slice())
         .expect("HKDF expand of 32 bytes is infallible");
     key

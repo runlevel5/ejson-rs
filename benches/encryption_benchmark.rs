@@ -1,5 +1,8 @@
 //! Benchmarks for encryption performance with large files.
 
+// A benchmark binary: it prints its results and panics on setup failures.
+#![allow(clippy::print_stdout, clippy::unwrap_used, clippy::expect_used)]
+
 use std::fs;
 use std::time::Instant;
 use tempfile::TempDir;
