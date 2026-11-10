@@ -6,6 +6,7 @@
 //!
 //! The walker uses `serde_norway` for parsing and serialization.
 
+use crate::crypto::CryptoError;
 use crate::handler::{
     FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, WalkAction, decode_legacy_public_key,
 };
@@ -25,8 +26,9 @@ pub enum YamlError {
     #[error("invalid yaml: {0}")]
     InvalidYaml(String),
 
+    /// Encrypting or decrypting a value failed; the cause is the `source`.
     #[error("action failed: {0}")]
-    ActionFailed(String),
+    ActionFailed(#[source] CryptoError),
 }
 
 /// Build an `InvalidYaml` error that never quotes document values.
@@ -95,7 +97,7 @@ pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], YamlError> {
 /// Note: The underscore prefix does NOT propagate to nested values.
 pub struct Walker<F>
 where
-    F: Fn(&[u8]) -> Result<Vec<u8>, String>,
+    F: Fn(&[u8]) -> Result<Vec<u8>, CryptoError>,
 {
     action: F,
 }
@@ -103,7 +105,7 @@ where
 // The action is a closure, which has no useful `Debug` output.
 impl<F> std::fmt::Debug for Walker<F>
 where
-    F: Fn(&[u8]) -> Result<Vec<u8>, String>,
+    F: Fn(&[u8]) -> Result<Vec<u8>, CryptoError>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Walker").finish_non_exhaustive()
@@ -112,7 +114,7 @@ where
 
 impl<F> Walker<F>
 where
-    F: Fn(&[u8]) -> Result<Vec<u8>, String>,
+    F: Fn(&[u8]) -> Result<Vec<u8>, CryptoError>,
 {
     pub fn new(action: F) -> Self {
         Self { action }
@@ -277,7 +279,7 @@ impl From<YamlError> for FormatError {
                 format: "YAML",
                 message: msg,
             },
-            YamlError::ActionFailed(msg) => FormatError::ActionFailed(msg),
+            YamlError::ActionFailed(source) => FormatError::ActionFailed(source),
         }
     }
 }
@@ -298,10 +300,6 @@ impl YamlHandler {
 impl FormatHandler for YamlHandler {
     fn format_name(&self) -> &'static str {
         "YAML"
-    }
-
-    fn extract_public_key(&self, data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError> {
-        extract_public_key(data).map_err(Into::into)
     }
 
     fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError> {

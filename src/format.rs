@@ -71,15 +71,14 @@ impl FileFormat {
         }
     }
 
-    /// Get a format handler for this format.
+    /// Get the format handler for this format.
     ///
-    /// This returns a boxed trait object that can handle encryption/decryption
-    /// operations for the format.
-    pub fn handler(&self) -> Box<dyn FormatHandler> {
+    /// The handlers are stateless, so this is a shared static reference.
+    pub fn handler(&self) -> &'static dyn FormatHandler {
         match self {
-            FileFormat::Json => Box::new(JsonHandler::new()),
-            FileFormat::Yaml => Box::new(YamlHandler::new()),
-            FileFormat::Toml => Box::new(TomlHandler::new()),
+            FileFormat::Json => &JsonHandler,
+            FileFormat::Yaml => &YamlHandler,
+            FileFormat::Toml => &TomlHandler,
         }
     }
 }
@@ -185,6 +184,17 @@ mod tests {
 
         let err = FileFormat::from_path("path/to/file").unwrap_err();
         assert!(matches!(err, FileFormatError::UnsupportedFileExtension(ext) if ext == "(none)"));
+    }
+
+    #[test]
+    fn test_handler_matches_the_format() {
+        for (format, name) in [
+            (FileFormat::Json, "JSON"),
+            (FileFormat::Yaml, "YAML"),
+            (FileFormat::Toml, "TOML"),
+        ] {
+            assert_eq!(format.handler().format_name(), name);
+        }
     }
 
     #[test]

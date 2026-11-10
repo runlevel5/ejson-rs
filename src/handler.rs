@@ -6,6 +6,8 @@
 
 use thiserror::Error;
 
+use crate::crypto::CryptoError;
+
 /// The standard key name at which the public key is stored in encrypted documents.
 pub const PUBLIC_KEY_FIELD: &str = "_public_key";
 
@@ -22,8 +24,8 @@ pub(crate) fn decode_legacy_public_key(key: &str) -> Option<[u8; KEY_SIZE]> {
 /// Type alias for the action function used in walk operations.
 ///
 /// This function takes a byte slice (the value to encrypt/decrypt) and returns
-/// either the transformed bytes or an error message.
-pub type WalkAction<'a> = &'a (dyn Fn(&[u8]) -> Result<Vec<u8>, String> + 'a);
+/// either the transformed bytes or the [`CryptoError`] that stopped it.
+pub type WalkAction<'a> = &'a (dyn Fn(&[u8]) -> Result<Vec<u8>, CryptoError> + 'a);
 
 /// Common errors that can occur during format processing.
 ///
@@ -44,8 +46,9 @@ pub enum FormatError {
         message: String,
     },
 
+    /// Encrypting or decrypting a value failed; the cause is the `source`.
     #[error("action failed: {0}")]
-    ActionFailed(String),
+    ActionFailed(#[source] CryptoError),
 }
 
 /// A trait for handling encrypted file formats.
@@ -57,8 +60,8 @@ pub enum FormatError {
 ///
 /// # Example: Adding a new format
 ///
-/// ```ignore
-/// use ejson::handler::{FormatHandler, FormatError, KEY_SIZE, WalkAction};
+/// ```
+/// use ejson::handler::{FormatHandler, FormatError, WalkAction};
 ///
 /// pub struct XmlHandler;
 ///
@@ -67,8 +70,8 @@ pub enum FormatError {
 ///         "XML"
 ///     }
 ///
-///     fn extract_public_key(&self, data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError> {
-///         // Parse XML and extract _public_key attribute/element
+///     fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError> {
+///         // Parse XML and return the _public_key attribute/element as written
 ///         todo!()
 ///     }
 ///
@@ -87,22 +90,12 @@ pub trait FormatHandler: Send + Sync {
     /// Returns the human-readable name of this format (e.g., "JSON", "YAML", "TOML").
     fn format_name(&self) -> &'static str;
 
-    /// Extract the public key from the document.
+    /// Extract the document's `_public_key` value as written, without
+    /// interpreting it.
     ///
-    /// The public key should be stored in a field named `_public_key` as a
-    /// hex-encoded 32-byte string.
-    fn extract_public_key(&self, data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError>;
-
-    /// Extract the raw `_public_key` value as a string, without interpreting it.
-    ///
-    /// This is used for scheme detection: a legacy `v1` key is a 64-character hex
-    /// string, while a hybrid `v2` key begins with `v2:`. The default implementation
-    /// delegates to [`FormatHandler::extract_public_key`] and hex-encodes the result,
-    /// so existing handlers keep working (legacy-only). Handlers that want to support
-    /// the `v2` scheme should override this to return the raw field value.
-    fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError> {
-        Ok(hex::encode(self.extract_public_key(data)?))
-    }
+    /// The scheme is detected from this string by [`crate::keys::PublicKey::parse`]:
+    /// a `v1` key is 64 hex characters, a `v2` key begins with `v2:`.
+    fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError>;
 
     /// Walk the document tree and apply an action to encryptable string values.
     ///
@@ -137,10 +130,6 @@ impl FormatHandler for Box<dyn FormatHandler> {
         (**self).format_name()
     }
 
-    fn extract_public_key(&self, data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError> {
-        (**self).extract_public_key(data)
-    }
-
     fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError> {
         (**self).extract_public_key_string(data)
     }
@@ -170,7 +159,7 @@ mod tests {
             "TEST"
         }
 
-        fn extract_public_key(&self, _data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError> {
+        fn extract_public_key_string(&self, _data: &[u8]) -> Result<String, FormatError> {
             Err(FormatError::PublicKeyMissing)
         }
 
@@ -188,7 +177,7 @@ mod tests {
         let handler = TestHandler;
         assert_eq!(handler.format_name(), "TEST");
         assert!(matches!(
-            handler.extract_public_key(b"test"),
+            handler.extract_public_key_string(b"test"),
             Err(FormatError::PublicKeyMissing)
         ));
     }
