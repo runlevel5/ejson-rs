@@ -10,7 +10,7 @@
 
 use std::fmt;
 
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::crypto::{CryptoError, Decrypter, Encrypter, KeyBytes, Keypair};
 use crate::hybrid::{
@@ -105,25 +105,27 @@ impl PublicKey {
 
 /// A schema-aware private key.
 ///
-/// The hybrid variant is boxed for the same size reason as [`PublicKey`].
+/// Opaque: the key material can't be read or pattern-matched out of it. It
+/// is wiped from memory on drop, and its `Debug` output is redacted.
 ///
-/// Security: [`HybridPrivateKey`] zeroizes itself on drop. Legacy key bytes
-/// are a plain array; [`AnyDecrypter::new`] wipes its copy once the key has
-/// been handed to the decrypter.
-pub enum PrivateKey {
-    Legacy(KeyBytes),
+/// ```compile_fail,E0616
+/// # fn demo(key: ejson::keys::PrivateKey) {
+/// let _inner = key.0; // private field
+/// # }
+/// ```
+pub struct PrivateKey(PrivateKeyInner);
+
+enum PrivateKeyInner {
+    Legacy(Zeroizing<KeyBytes>),
+    // Boxed for the same size reason as [`PublicKey::Hybrid`].
     Hybrid(Box<HybridPrivateKey>),
 }
 
 // Never prints key material.
 impl fmt::Debug for PrivateKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let scheme = match self {
-            PrivateKey::Legacy(_) => SCHEME_LEGACY,
-            PrivateKey::Hybrid(_) => SCHEME_HYBRID,
-        };
         f.debug_struct("PrivateKey")
-            .field("scheme", &scheme)
+            .field("scheme", &self.scheme())
             .field("key", &"[REDACTED]")
             .finish()
     }
@@ -132,11 +134,19 @@ impl fmt::Debug for PrivateKey {
 impl PrivateKey {
     /// Parse private key material for the given public key, verifying the scheme matches.
     pub fn parse_for_public(public: &PublicKey, data: &str) -> Result<Self, CryptoError> {
-        match public {
-            PublicKey::Legacy(_) => Ok(PrivateKey::Legacy(parse_legacy_private_key(data)?)),
-            PublicKey::Hybrid(h) => Ok(PrivateKey::Hybrid(Box::new(
-                HybridPrivateKey::parse_for_public(h, data)?,
-            ))),
+        Ok(Self(match public {
+            PublicKey::Legacy(_) => PrivateKeyInner::Legacy(parse_legacy_private_key(data)?),
+            PublicKey::Hybrid(h) => {
+                PrivateKeyInner::Hybrid(Box::new(HybridPrivateKey::parse_for_public(h, data)?))
+            }
+        }))
+    }
+
+    /// The scheme this key belongs to: `"v1"` or `"v2"`.
+    pub fn scheme(&self) -> &'static str {
+        match self.0 {
+            PrivateKeyInner::Legacy(_) => SCHEME_LEGACY,
+            PrivateKeyInner::Hybrid(_) => SCHEME_HYBRID,
         }
     }
 }
@@ -157,7 +167,7 @@ impl AnyEncrypter {
     pub fn for_public_key(public: &PublicKey) -> Result<Self, CryptoError> {
         match public {
             PublicKey::Legacy(peer) => {
-                let kp = Keypair::generate()?;
+                let kp = Keypair::generate();
                 Ok(AnyEncrypter::Legacy(kp.into_encrypter(*peer)))
             }
             PublicKey::Hybrid(h) => Ok(AnyEncrypter::Hybrid(Box::new(HybridEncrypter::new(
@@ -184,20 +194,15 @@ pub enum AnyDecrypter {
 impl AnyDecrypter {
     /// Build a decrypter from a matching public/private key pair.
     pub fn new(public: &PublicKey, private: PrivateKey) -> Result<Self, CryptoError> {
-        match (public, private) {
-            (PublicKey::Legacy(pubk), PrivateKey::Legacy(mut privk)) => {
-                let kp = Keypair::from_keys(*pubk, privk);
-                // `KeyBytes` is `Copy`: the keypair (zeroized on drop) now
-                // owns the key, so wipe this copy.
-                privk.zeroize();
+        match (public, private.0) {
+            (PublicKey::Legacy(pubk), PrivateKeyInner::Legacy(privk)) => {
+                // `privk` wipes its copy when it goes out of scope; the
+                // keypair wipes the one it now owns on drop.
+                let kp = Keypair::from_keys(*pubk, *privk);
                 Ok(AnyDecrypter::Legacy(kp.into_decrypter()))
             }
-            (PublicKey::Hybrid(_), PrivateKey::Hybrid(privk)) => {
+            (PublicKey::Hybrid(_), PrivateKeyInner::Hybrid(privk)) => {
                 Ok(AnyDecrypter::Hybrid(Box::new(HybridDecrypter::new(*privk))))
-            }
-            (_, PrivateKey::Legacy(mut privk)) => {
-                privk.zeroize();
-                Err(CryptoError::KeyMismatch)
             }
             _ => Err(CryptoError::KeyMismatch),
         }
@@ -220,14 +225,14 @@ pub fn generate_keypair_for_scheme(
 ) -> Result<(String, Zeroizing<String>, String), CryptoError> {
     match normalize_scheme(scheme).as_str() {
         SCHEME_LEGACY => {
-            let kp = Keypair::generate()?;
+            let kp = Keypair::generate();
             let public = kp.public_string();
             let private = kp.private_hex();
             let key_id = public.clone();
             Ok((public, private, key_id))
         }
         SCHEME_HYBRID => {
-            let (public, private) = hybrid::generate_hybrid_keypair()?;
+            let (public, private) = hybrid::generate_hybrid_keypair();
             let key_id = public.key_id();
             Ok((
                 public.to_document_string(),
@@ -243,14 +248,13 @@ fn parse_legacy_public_key(s: &str) -> Result<KeyBytes, CryptoError> {
     crate::handler::decode_legacy_public_key(s).ok_or(CryptoError::InvalidPublicKey)
 }
 
-fn parse_legacy_private_key(data: &str) -> Result<KeyBytes, CryptoError> {
-    // `Zeroizing` wipes the decoded copy on return.
-    let bytes =
-        Zeroizing::new(hex::decode(data.trim()).map_err(|_| CryptoError::InvalidPrivateKey)?);
-    bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| CryptoError::InvalidPrivateKey)
+fn parse_legacy_private_key(data: &str) -> Result<Zeroizing<KeyBytes>, CryptoError> {
+    // Decoded straight into a buffer that is wiped on drop, including when
+    // decoding fails part-way.
+    let mut key = Zeroizing::new([0u8; crate::crypto::KEY_SIZE]);
+    hex::decode_to_slice(data.trim(), key.as_mut_slice())
+        .map_err(|_| CryptoError::InvalidPrivateKey)?;
+    Ok(key)
 }
 
 #[cfg(test)]

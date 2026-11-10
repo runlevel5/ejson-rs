@@ -4,10 +4,6 @@
 //! It models a situation where you don't care about authenticating the encryptor,
 //! so the nonce and encryption public key are prepended to the encrypted message.
 
-// This module owns the deprecated-for-external-use secret fields below; its
-// own accesses are intended.
-#![allow(deprecated)]
-
 use crypto_box::{
     PublicKey, SalsaBox, SecretKey,
     aead::{Aead, AeadCore, OsRng},
@@ -59,16 +55,19 @@ pub enum CryptoError {
 ///
 /// Security: Private key material is automatically zeroized when the struct is dropped.
 /// Clone is intentionally not implemented to prevent uncontrolled duplication of key material.
+///
+/// The private key can't be read out as bytes; [`private_hex`](Self::private_hex)
+/// returns it as a self-wiping hex string for writing to a key file.
+///
+/// ```compile_fail,E0616
+/// let keypair = ejson::crypto::Keypair::generate();
+/// let _key = keypair.private; // private field
+/// ```
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct Keypair {
     #[zeroize(skip)] // Public key doesn't need zeroizing
-    pub public: KeyBytes,
-    #[deprecated(
-        since = "1.1.0",
-        note = "reading this field copies the private key out of the zeroizing \
-                `Keypair`; it will become private in 2.0. Use `private_hex()`"
-    )]
-    pub private: KeyBytes,
+    public: KeyBytes,
+    private: KeyBytes,
 }
 
 // Custom Debug implementation that redacts the private key
@@ -83,14 +82,14 @@ impl fmt::Debug for Keypair {
 
 impl Keypair {
     /// Generate a new random Curve25519 keypair.
-    pub fn generate() -> Result<Self, CryptoError> {
+    pub fn generate() -> Self {
         let secret_key = SecretKey::generate(&mut OsRng);
         let public_key = secret_key.public_key();
 
-        Ok(Self {
+        Self {
             public: *public_key.as_bytes(),
             private: secret_key.to_bytes(),
-        })
+        }
     }
 
     /// Create a keypair from existing public and private keys.
@@ -98,22 +97,14 @@ impl Keypair {
         Self { public, private }
     }
 
+    /// Returns the public key bytes.
+    pub fn public_key(&self) -> &KeyBytes {
+        &self.public
+    }
+
     /// Returns the public key as a hex-encoded string.
     pub fn public_string(&self) -> String {
         hex::encode(self.public)
-    }
-
-    /// Returns the private key as a hex-encoded string.
-    ///
-    /// Security: The returned string should be wrapped in `Zeroizing<String>` by the caller
-    /// if it will be stored.
-    #[deprecated(
-        since = "1.1.0",
-        note = "returns the private key in a plain `String` that is never wiped; \
-                use `private_hex()`"
-    )]
-    pub fn private_string(&self) -> String {
-        hex::encode(self.private)
     }
 
     /// Returns the private key as a hex-encoded string that is wiped from
@@ -291,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_keypair_generation() {
-        let kp = Keypair::generate().unwrap();
+        let kp = Keypair::generate();
         assert_eq!(kp.public.len(), 32);
         assert_eq!(kp.private.len(), 32);
         assert_eq!(kp.public_string().len(), 64);
@@ -300,8 +291,8 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt_roundtrip() {
-        let sender_kp = Keypair::generate().unwrap();
-        let receiver_kp = Keypair::generate().unwrap();
+        let sender_kp = Keypair::generate();
+        let receiver_kp = Keypair::generate();
         let receiver_public = receiver_kp.public;
 
         let encrypter = sender_kp.into_encrypter(receiver_public);
@@ -316,7 +307,7 @@ mod tests {
 
     #[test]
     fn test_already_encrypted_passthrough() {
-        let kp = Keypair::generate().unwrap();
+        let kp = Keypair::generate();
         let encrypter = kp.encrypter(kp.public);
 
         // First encryption
@@ -330,7 +321,7 @@ mod tests {
 
     #[test]
     fn test_keypair_debug_redacts_private_key() {
-        let kp = Keypair::generate().unwrap();
+        let kp = Keypair::generate();
         let debug_output = format!("{kp:?}");
         assert!(debug_output.contains("[REDACTED]"));
         assert!(!debug_output.contains(kp.private_hex().as_str()));
