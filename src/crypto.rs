@@ -66,11 +66,6 @@ pub enum CryptoError {
 ///
 /// The private key can't be read out as bytes; [`private_hex`](Self::private_hex)
 /// returns it as a self-wiping hex string for writing to a key file.
-///
-/// ```compile_fail,E0616
-/// let keypair = ejson::crypto::Keypair::generate();
-/// let _key = keypair.private; // private field
-/// ```
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct Keypair {
     #[zeroize(skip)] // Public key doesn't need zeroizing
@@ -105,11 +100,6 @@ impl Keypair {
         Self { public, private }
     }
 
-    /// Returns the public key bytes.
-    pub fn public_key(&self) -> &KeyBytes {
-        &self.public
-    }
-
     /// Returns the public key as a hex-encoded string.
     pub fn public_string(&self) -> String {
         hex::encode(self.public)
@@ -133,22 +123,6 @@ impl Keypair {
     /// This consumes the keypair to prevent multiple copies of key material.
     pub fn into_decrypter(self) -> Decrypter {
         Decrypter::new(self)
-    }
-
-    /// Create an Encrypter while keeping the keypair (for cases where both encrypt and decrypt are needed).
-    ///
-    /// Security: This copies the private key material. Use sparingly.
-    pub fn encrypter(&self, peer_public: KeyBytes) -> Encrypter {
-        let kp = Self::from_keys(self.public, self.private);
-        Encrypter::new(kp, peer_public)
-    }
-
-    /// Create a Decrypter while keeping the keypair (for cases where both encrypt and decrypt are needed).
-    ///
-    /// Security: This copies the private key material. Use sparingly.
-    pub fn decrypter(&self) -> Decrypter {
-        let kp = Self::from_keys(self.public, self.private);
-        Decrypter::new(kp)
     }
 }
 
@@ -311,7 +285,8 @@ mod tests {
     #[test]
     fn test_already_encrypted_passthrough() {
         let kp = Keypair::generate();
-        let encrypter = kp.encrypter(kp.public);
+        let peer = kp.public;
+        let encrypter = kp.into_encrypter(peer);
 
         // First encryption
         let plaintext = b"secret";

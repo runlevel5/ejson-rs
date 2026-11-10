@@ -6,13 +6,10 @@
 
 use thiserror::Error;
 
-use crate::crypto::CryptoError;
+use crate::crypto::{CryptoError, KEY_SIZE};
 
 /// The standard key name at which the public key is stored in encrypted documents.
 pub const PUBLIC_KEY_FIELD: &str = "_public_key";
-
-/// Size of the public key in bytes.
-pub const KEY_SIZE: usize = 32;
 
 /// Decode a legacy (`v1`) public key: exactly 64 hex characters.
 pub(crate) fn decode_legacy_public_key(key: &str) -> Option<[u8; KEY_SIZE]> {
@@ -72,16 +69,12 @@ pub enum FormatError {
 ///
 /// # Example: Adding a new format
 ///
-/// ```
+/// ```ignore
 /// use ejson::handler::{FormatHandler, FormatError, WalkAction};
 ///
 /// pub struct XmlHandler;
 ///
 /// impl FormatHandler for XmlHandler {
-///     fn format_name(&self) -> &'static str {
-///         "XML"
-///     }
-///
 ///     fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError> {
 ///         // Parse XML and return the _public_key attribute/element as written
 ///         todo!()
@@ -99,9 +92,6 @@ pub enum FormatError {
 /// }
 /// ```
 pub trait FormatHandler: Send + Sync {
-    /// Returns the human-readable name of this format (e.g., "JSON", "YAML", "TOML").
-    fn format_name(&self) -> &'static str;
-
     /// Extract the document's `_public_key` value as written, without
     /// interpreting it.
     ///
@@ -141,10 +131,6 @@ mod tests {
     struct TestHandler;
 
     impl FormatHandler for TestHandler {
-        fn format_name(&self) -> &'static str {
-            "TEST"
-        }
-
         fn extract_public_key_string(&self, _data: &[u8]) -> Result<String, FormatError> {
             Err(FormatError::PublicKeyMissing)
         }
@@ -161,7 +147,6 @@ mod tests {
     #[test]
     fn test_format_handler_trait() {
         let handler = TestHandler;
-        assert_eq!(handler.format_name(), "TEST");
         assert!(matches!(
             handler.extract_public_key_string(b"test"),
             Err(FormatError::PublicKeyMissing)

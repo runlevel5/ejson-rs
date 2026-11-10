@@ -7,9 +7,7 @@
 //! The walker uses `serde_norway` for parsing and serialization.
 
 use crate::crypto::CryptoError;
-use crate::handler::{
-    FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, WalkAction, decode_legacy_public_key,
-};
+use crate::handler::{FormatError, FormatHandler, PUBLIC_KEY_FIELD, WalkAction};
 use serde_norway::{Mapping, Value};
 
 /// Build a syntax error that never quotes document values.
@@ -64,12 +62,6 @@ pub fn extract_public_key_string(data: &[u8]) -> Result<String, FormatError> {
         .as_str()
         .map(str::to_string)
         .ok_or(FormatError::PublicKeyInvalid)
-}
-
-/// Extract the _public_key value from an EYAML document as a legacy 32-byte key.
-pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError> {
-    let key_str = extract_public_key_string(data)?;
-    decode_legacy_public_key(&key_str).ok_or(FormatError::PublicKeyInvalid)
 }
 
 /// Walker walks a YAML structure, applying an action to encryptable string values.
@@ -259,18 +251,7 @@ fn transform_yaml_keys(value: Value) -> Value {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct YamlHandler;
 
-impl YamlHandler {
-    /// Create a new YAML format handler.
-    pub fn new() -> Self {
-        Self
-    }
-}
-
 impl FormatHandler for YamlHandler {
-    fn format_name(&self) -> &'static str {
-        "YAML"
-    }
-
     fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError> {
         extract_public_key_string(data)
     }
@@ -294,9 +275,9 @@ mod tests {
             br#"_public_key: "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
 secret: "value"
 "#;
-        let key = extract_public_key(yaml).unwrap();
+        let key = extract_public_key_string(yaml).unwrap();
         assert_eq!(
-            hex::encode(key),
+            key,
             "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
         );
     }
@@ -305,7 +286,7 @@ secret: "value"
     fn test_extract_public_key_missing() {
         let yaml = br#"secret: "value""#;
         assert!(matches!(
-            extract_public_key(yaml),
+            extract_public_key_string(yaml),
             Err(FormatError::PublicKeyMissing)
         ));
     }

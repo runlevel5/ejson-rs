@@ -311,6 +311,25 @@ fn encrypt_accepts_several_files_and_formats() {
 }
 
 #[test]
+fn encrypt_warns_about_unquoted_yaml_numbers() {
+    let fx = Fixture::new("v1");
+    let path = fx.write(
+        "s.eyaml",
+        "_public_key: PUBKEY\npassword: hunter2\npin: 123456\n",
+    );
+
+    let output = run(ejson().arg("encrypt").arg(&path));
+    assert_success(&output);
+    let err = stderr(&output);
+    assert!(err.starts_with("ejson: warning: "), "{err}");
+    assert!(err.contains("s.eyaml: these values are numbers or booleans in YAML"));
+    assert!(err.contains("left unencrypted: pin."), "{err}");
+    // The warning goes to stderr; stdout is only the usual summary line.
+    assert!(stdout(&output).starts_with("Wrote "));
+    assert_eq!(stdout(&output).lines().count(), 1);
+}
+
+#[test]
 fn encrypt_errors() {
     let fx = Fixture::new("v1");
 

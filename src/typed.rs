@@ -7,7 +7,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use ejson::typed::DecryptedContent;
+//! use ejson::DecryptedContent;
 //!
 //! fn extract_env(content: &DecryptedContent) -> Vec<(String, String)> {
 //!     let mut env = Vec::new();

@@ -30,14 +30,14 @@ use crate::hybrid::{
 /// assert_eq!("pqc".parse::<Scheme>()?, Scheme::V2);
 /// assert_eq!(Scheme::V2.to_string(), "v2");
 /// assert!("v9".parse::<Scheme>().is_err());
-/// # Ok::<(), ejson::crypto::CryptoError>(())
+/// # Ok::<(), ejson::CryptoError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Scheme {
-    /// Legacy NaCl box (Curve25519 + XSalsa20 + Poly1305); see [`crate::crypto`].
+    /// Legacy NaCl box (Curve25519 + XSalsa20 + Poly1305).
     #[default]
     V1,
-    /// Hybrid post-quantum (X25519 + ML-KEM-768); see [`crate::hybrid`].
+    /// Hybrid post-quantum (X25519 + ML-KEM-768, HKDF-SHA256, XChaCha20-Poly1305).
     V2,
 }
 
@@ -123,14 +123,6 @@ impl PublicKey {
         }
     }
 
-    /// The document form of this public key (hex for legacy, `v2:<base64>` for hybrid).
-    pub fn to_document_string(&self) -> String {
-        match self {
-            PublicKey::Legacy(k) => hex::encode(k),
-            PublicKey::Hybrid(h) => h.to_document_string(),
-        }
-    }
-
     /// The keydir filename for this key. Legacy keys use the 64-char hex public key
     /// (unchanged from before); hybrid keys use a 32-char derived key ID.
     pub fn key_id(&self) -> String {
@@ -145,12 +137,6 @@ impl PublicKey {
 ///
 /// Opaque: the key material can't be read or pattern-matched out of it. It
 /// is wiped from memory on drop, and its `Debug` output is redacted.
-///
-/// ```compile_fail,E0616
-/// # fn demo(key: ejson::keys::PrivateKey) {
-/// let _inner = key.0; // private field
-/// # }
-/// ```
 pub struct PrivateKey(PrivateKeyInner);
 
 enum PrivateKeyInner {

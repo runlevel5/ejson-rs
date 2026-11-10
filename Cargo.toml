@@ -57,6 +57,11 @@ same-file = "1.0"
 # Process hardening (disable core dumps)
 rustix = { version = "1.1", features = ["process"] }
 
+[features]
+# Makes the implementation modules public, for this repository's fuzz targets.
+# Not part of the public API: anything it exposes can change in any release.
+unstable-internals = []
+
 [dev-dependencies]
 tempfile = "3.24"
 

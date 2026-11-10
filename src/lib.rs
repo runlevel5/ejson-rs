@@ -35,33 +35,93 @@
 //! implementations, which compare tags in constant time. ejson itself does no
 //! other secret-dependent comparisons.
 
-pub mod boxed_message;
-pub mod crypto;
+/// Declares implementation modules: private, unless the `unstable-internals`
+/// feature is on, which makes them `pub` for the fuzz targets.
+macro_rules! internal_modules {
+    ($($name:ident),* $(,)?) => {
+        $(
+            #[cfg(feature = "unstable-internals")]
+            pub mod $name;
+            #[cfg(not(feature = "unstable-internals"))]
+            mod $name;
+        )*
+    };
+}
+
+/// The implementation modules are not part of the public API.
+///
+/// ```compile_fail
+/// use ejson::crypto::Keypair;
+/// ```
+///
+/// ```compile_fail
+/// use ejson::keys::PrivateKey;
+/// ```
+///
+/// ```compile_fail
+/// use ejson::json::Walker;
+/// ```
+#[cfg(all(doctest, not(feature = "unstable-internals")))]
+struct InternalModulesArePrivate;
+
+/// Even with `unstable-internals`, private key material can't be read out
+/// of the key types.
+///
+/// ```compile_fail
+/// let keypair = ejson::crypto::Keypair::generate();
+/// let _key = keypair.private; // private field
+/// ```
+///
+/// ```compile_fail
+/// let (_public, private) = ejson::hybrid::generate_hybrid_keypair();
+/// let _seed = private.mlkem_seed; // private field
+/// ```
+///
+/// ```compile_fail
+/// # fn demo(key: ejson::keys::PrivateKey) {
+/// let _inner = key.0; // private field
+/// # }
+/// ```
+///
+/// The same code without the private access does compile:
+///
+/// ```
+/// let keypair = ejson::crypto::Keypair::generate();
+/// let _hex = keypair.private_hex();
+/// let (_public, private) = ejson::hybrid::generate_hybrid_keypair();
+/// let _file = private.to_file_string();
+/// # fn demo(key: ejson::keys::PrivateKey) {
+/// let _scheme = key.scheme();
+/// # }
+/// ```
+#[cfg(all(doctest, feature = "unstable-internals"))]
+struct SecretFieldsArePrivate;
+
 pub mod env;
-pub mod format;
-pub mod handler;
-pub mod hybrid;
-pub mod json;
-pub mod keys;
-pub mod toml;
-pub mod typed;
-pub mod yaml;
+
+internal_modules!(
+    boxed_message,
+    crypto,
+    format,
+    handler,
+    hybrid,
+    json,
+    keys,
+    toml,
+    typed,
+    yaml,
+);
 
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
 
 use boxed_message::ValueKind;
-use crypto::CryptoError;
 
-// Re-export key types for public API
-pub use crypto::KeyBytes;
+pub use crypto::CryptoError;
+pub use format::{FileFormat, FileFormatError};
+pub use handler::{FormatError, PUBLIC_KEY_FIELD};
 pub use keys::{GeneratedKeypair, Scheme, generate_keypair};
-// Re-export typed API
-pub use format::FileFormat;
-// Re-export handler trait for implementing custom formats
-use format::FileFormatError;
-pub use handler::{FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD};
 pub use typed::{DecryptedContent, DecryptedValue};
 
 use thiserror::Error;
@@ -285,13 +345,14 @@ pub fn encrypt<R: Read, W: Write>(
     // The input is plaintext: wipe it once it has been encrypted.
     let data = Zeroizing::new(read_to_end_limited(&mut input, MAX_FILE_SIZE, 0)?);
 
-    encrypt_data(&data, &mut output, format)
+    encrypt_data(&data, &mut output, format, None)
 }
 
 fn encrypt_data<W: Write>(
     data: &[u8],
     output: &mut W,
     format: FileFormat,
+    source: Option<&Path>,
 ) -> Result<usize, EjsonError> {
     // Get the appropriate handler for this format
     let handler = format.handler();
@@ -317,8 +378,30 @@ fn encrypt_data<W: Write>(
     // Walk and encrypt
     let new_data = handler.walk(&data, &encrypt_fn)?;
 
+    if format == FileFormat::Yaml {
+        warn_unencrypted_yaml_scalars(&new_data, source);
+    }
+
     output.write_all(&new_data)?;
     Ok(new_data.len())
+}
+
+/// Warn (through `log`) about YAML values that stayed in plaintext only
+/// because YAML parsed them as numbers or booleans, such as an unquoted
+/// `pin: 123456`. `source` is the file being encrypted, if there is one.
+fn warn_unencrypted_yaml_scalars(encrypted: &[u8], source: Option<&Path>) {
+    let Ok(paths) = yaml::plaintext_scalar_paths(encrypted) else {
+        return;
+    };
+    if paths.is_empty() {
+        return;
+    }
+    let file = source.map_or_else(String::new, |path| format!("{}: ", path.display()));
+    log::warn!(
+        "{file}these values are numbers or booleans in YAML, so they were left \
+         unencrypted: {}. Quote them (e.g. pin: \"123456\") to have them encrypted",
+        paths.join(", ")
+    );
 }
 
 /// Encrypt a file in place with file locking.
@@ -345,7 +428,7 @@ pub fn encrypt_file_in_place<P: AsRef<Path>>(file_path: P) -> Result<usize, Ejso
 
     // Encrypt
     let mut output = Vec::new();
-    let size = encrypt_data(&data, &mut output, format)?;
+    let size = encrypt_data(&data, &mut output, format, Some(file_path))?;
 
     // Nothing new to encrypt: leave the file untouched.
     if output != *data {
@@ -616,7 +699,7 @@ pub fn decrypt_file<P: AsRef<Path>>(
 /// # Example
 ///
 /// ```no_run
-/// use ejson::{decrypt_bytes_typed, DecryptedContent, KeySource, UnderscorePrefix, format::FileFormat};
+/// use ejson::{decrypt_bytes_typed, DecryptedContent, FileFormat, KeySource, UnderscorePrefix};
 ///
 /// let encrypted_data = b"{\"_public_key\": \"...\", \"secret\": \"EJ[...]\"}";
 /// let key = KeySource::keydir("/opt/ejson/keys");
@@ -884,6 +967,52 @@ mod tests {
     use super::*;
     use crate::crypto::Keypair;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_unencrypted_yaml_scalars_are_reported_through_log() {
+        test_log::install();
+
+        let temp_dir = TempDir::new().unwrap();
+        let kp = generate_keypair(Scheme::V1);
+        let path = temp_dir.path().join("yaml-scalar-probe.eyaml");
+        fs::write(
+            &path,
+            format!(
+                "_public_key: {}\npassword: hunter2\npin: 987654\ndb:\n  port: 5432\n_skip: 1\n",
+                kp.public_key
+            ),
+        )
+        .unwrap();
+        encrypt_file_in_place(&path).unwrap();
+
+        let warnings = test_log::messages_containing("yaml-scalar-probe.eyaml");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].starts_with("WARN: "));
+        assert!(warnings[0].contains("left unencrypted: pin, db.port. Quote them"));
+        // Names only: neither the values nor the string secret are logged.
+        assert!(!warnings[0].contains("987654"));
+        assert!(!warnings[0].contains("hunter2"));
+
+        // A file with nothing to report produces no warning, and neither
+        // does a JSON file with numbers (which are unambiguous there).
+        let clean = temp_dir.path().join("yaml-clean-probe.eyaml");
+        fs::write(
+            &clean,
+            format!("_public_key: {}\npassword: x\n", kp.public_key),
+        )
+        .unwrap();
+        encrypt_file_in_place(&clean).unwrap();
+        assert!(test_log::messages_containing("yaml-clean-probe").is_empty());
+
+        let json = temp_dir.path().join("json-number-probe.ejson");
+        fs::write(
+            &json,
+            format!(r#"{{"_public_key": "{}", "pin": 123456}}"#, kp.public_key),
+        )
+        .unwrap();
+        encrypt_file_in_place(&json).unwrap();
+        assert!(test_log::messages_containing("json-number-probe").is_empty());
+    }
 
     #[test]
     #[cfg(unix)]

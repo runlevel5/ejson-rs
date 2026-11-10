@@ -10,9 +10,7 @@
 use std::fmt;
 
 use crate::crypto::CryptoError;
-use crate::handler::{
-    FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, WalkAction, decode_legacy_public_key,
-};
+use crate::handler::{FormatError, FormatHandler, PUBLIC_KEY_FIELD, WalkAction};
 use serde::de::{Deserialize, Deserializer, IgnoredAny, MapAccess, Visitor};
 use serde_json::Value;
 use zeroize::Zeroizing;
@@ -107,12 +105,6 @@ pub fn has_duplicate_public_key(data: &[u8]) -> bool {
 
     // Not an object (or not JSON): there is nothing to duplicate.
     serde_json::from_slice::<PublicKeyCount>(data).is_ok_and(|c| c.0 > 1)
-}
-
-/// Extract the _public_key value from an EJSON document as a legacy 32-byte key.
-pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError> {
-    let key_str = extract_public_key_string(data)?;
-    decode_legacy_public_key(&key_str).ok_or(FormatError::PublicKeyInvalid)
 }
 
 /// Walker walks a JSON structure, applying an action to encryptable string values.
@@ -576,18 +568,7 @@ fn collapse_multiline(data: &[u8]) -> Option<Vec<u8>> {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct JsonHandler;
 
-impl JsonHandler {
-    /// Create a new JSON format handler.
-    pub fn new() -> Self {
-        Self
-    }
-}
-
 impl FormatHandler for JsonHandler {
-    fn format_name(&self) -> &'static str {
-        "JSON"
-    }
-
     fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError> {
         if has_duplicate_public_key(data) {
             return Err(FormatError::InvalidSyntax {
@@ -618,9 +599,9 @@ mod tests {
     #[test]
     fn test_extract_public_key() {
         let json = br#"{"_public_key": "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f", "secret": "value"}"#;
-        let key = extract_public_key(json).unwrap();
+        let key = extract_public_key_string(json).unwrap();
         assert_eq!(
-            hex::encode(key),
+            key,
             "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
         );
     }
@@ -629,7 +610,7 @@ mod tests {
     fn test_extract_public_key_missing() {
         let json = br#"{"secret": "value"}"#;
         assert!(matches!(
-            extract_public_key(json),
+            extract_public_key_string(json),
             Err(FormatError::PublicKeyMissing)
         ));
     }
