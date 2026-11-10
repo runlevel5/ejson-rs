@@ -1,0 +1,54 @@
+[package]
+name = "ejson-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1.0"
+serde_norway = "0.9"
+toml = "1.0"
+ejson = { path = ".." }
+
+# Keep the fuzz crate out of any parent workspace.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "boxed_message"
+path = "fuzz_targets/boxed_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "json_walk"
+path = "fuzz_targets/json_walk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "yaml_toml_walk"
+path = "fuzz_targets/yaml_toml_walk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "key_file"
+path = "fuzz_targets/key_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decrypt"
+path = "fuzz_targets/decrypt.rs"
+test = false
+doc = false
+bench = false
