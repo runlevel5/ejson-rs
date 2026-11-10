@@ -47,6 +47,14 @@ pub enum CryptoError {
     #[error("invalid message format")]
     InvalidMessageFormat,
 
+    /// A value starts with `EJ[` but is not a well-formed encrypted message:
+    /// it is damaged, or was written by a newer ejson with an unknown schema.
+    #[error(
+        "a value starts with `EJ[` but is not a valid encrypted message \
+         (damaged, or written by a newer ejson)"
+    )]
+    DamagedMessage,
+
     #[error("unsupported key scheme: {0}")]
     UnsupportedScheme(String),
 }

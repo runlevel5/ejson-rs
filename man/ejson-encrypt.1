@@ -71,7 +71,10 @@ unless they also have underscore prefixes.
 .B Already encrypted values unchanged
 \- Values starting with
 .B EJ[
-are not re-encrypted.
+are not re-encrypted. A value that starts with
+.B EJ[
+but is not a well-formed encrypted message is an error, and the file is left
+unchanged.
 .SH ENCRYPTED VALUE FORMAT
 Encrypted values have the format:
 .PP

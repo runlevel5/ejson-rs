@@ -26,6 +26,12 @@ Encrypted values (those starting with
 .BR "EJ[" )
 are decrypted and replaced with their plaintext values. Unencrypted values
 (including those under underscore-prefixed keys) are passed through unchanged.
+.PP
+A value that starts with
+.B EJ[
+but is not a well-formed encrypted message (a truncated or hand-edited
+ciphertext, or one written by a newer ejson) is an error: the command fails
+and prints nothing, rather than passing the damaged value through.
 .SH OPTIONS
 .TP
 .BR \-k ", " \-\-keydir =\fIpath\fR

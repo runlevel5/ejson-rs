@@ -51,6 +51,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
 
+use boxed_message::ValueKind;
 use crypto::CryptoError;
 
 // Re-export key types for public API
@@ -294,8 +295,14 @@ fn encrypt_data<W: Write>(
     let pubkey = keys::PublicKey::parse(&pubkey_string)?;
     let encrypter = keys::AnyEncrypter::for_public_key(&pubkey)?;
 
-    // Create encryption closure
-    let encrypt_fn = |plaintext: &[u8]| encrypter.encrypt(plaintext);
+    // Encrypt plaintext values and leave already-encrypted ones alone. A value
+    // that looks encrypted but isn't well-formed is refused: encrypting it
+    // again would bury a damaged secret (or one from a newer ejson) inside a
+    // valid-looking one.
+    let encrypt_fn = |value: &[u8]| match boxed_message::classify_value(value) {
+        ValueKind::Damaged => Err(CryptoError::DamagedMessage),
+        ValueKind::Plaintext | ValueKind::Boxed => encrypter.encrypt(value),
+    };
 
     // Walk and encrypt
     let new_data = handler.walk(&data, &encrypt_fn)?;
@@ -538,13 +545,13 @@ fn decrypt_data<W: Write>(
     let privkey = find_private_key(&pubkey, key)?;
     let decrypter = keys::AnyDecrypter::new(&pubkey, privkey)?;
 
-    // Create decryption closure that conditionally decrypts
-    let decrypt_fn = |ciphertext: &[u8]| {
-        if boxed_message::is_boxed_message(ciphertext) {
-            decrypter.decrypt(ciphertext)
-        } else {
-            Ok(ciphertext.to_vec())
-        }
+    // Decrypt encrypted values and pass plaintext ones through (a secret that
+    // was added but not encrypted yet). A value that looks encrypted but isn't
+    // well-formed is an error: printing it unchanged would hide the damage.
+    let decrypt_fn = |value: &[u8]| match boxed_message::classify_value(value) {
+        ValueKind::Boxed => decrypter.decrypt(value),
+        ValueKind::Plaintext => Ok(value.to_vec()),
+        ValueKind::Damaged => Err(CryptoError::DamagedMessage),
     };
 
     // Walk and decrypt using the handler
@@ -1323,6 +1330,80 @@ secret: "my secret"
             decrypt_file(&path, KeySource::PrivateKey(""), false),
             Err(EjsonError::InvalidPrivateKey)
         ));
+    }
+
+    /// Whether `result` failed with `CryptoError::DamagedMessage`.
+    fn is_damaged_message_error<T>(result: &Result<T, EjsonError>) -> bool {
+        matches!(
+            result,
+            Err(EjsonError::Format(FormatError::ActionFailed(
+                CryptoError::DamagedMessage
+            )))
+        )
+    }
+
+    #[test]
+    fn test_damaged_encrypted_values_are_rejected() {
+        for (name, doc) in [
+            ("s.ejson", r#"{"_public_key": "PUB", "a": "secret"}"#),
+            ("s.eyaml", "_public_key: PUB\na: secret\n"),
+            ("s.etoml", "_public_key = \"PUB\"\na = \"secret\"\n"),
+        ] {
+            let temp_dir = TempDir::new().unwrap();
+            let kp = generate_keypair(Scheme::V1);
+            let key = KeySource::PrivateKey(&kp.private_key);
+            let path = temp_dir.path().join(name);
+            fs::write(&path, doc.replace("PUB", &kp.public_key)).unwrap();
+            encrypt_file_in_place(&path).unwrap();
+            let encrypted = fs::read_to_string(&path).unwrap();
+            assert!(decrypt_file(&path, key, false).is_ok());
+
+            for damaged in [
+                // one extra character in the encrypter's public key
+                encrypted.replacen("EJ[1:", "EJ[1:A", 1),
+                // a schema version this build doesn't know
+                encrypted.replacen("EJ[1:", "EJ[3:", 1),
+            ] {
+                fs::write(&path, &damaged).unwrap();
+
+                // Decrypt fails instead of printing the value unchanged...
+                assert!(
+                    is_damaged_message_error(&decrypt_file(&path, key, false)),
+                    "{name}"
+                );
+                // ...and encrypt refuses to wrap it in a second layer,
+                // leaving the file as it was.
+                assert!(
+                    is_damaged_message_error(&encrypt_file_in_place(&path)),
+                    "{name}"
+                );
+                assert_eq!(fs::read_to_string(&path).unwrap(), damaged, "{name}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_unencrypted_values_still_pass_through_on_decrypt() {
+        // A secret added to an encrypted file but not encrypted yet.
+        let temp_dir = TempDir::new().unwrap();
+        let kp = generate_keypair(Scheme::V1);
+        let path = temp_dir.path().join("s.ejson");
+        fs::write(
+            &path,
+            format!(r#"{{"_public_key": "{}", "a": "secret"}}"#, kp.public_key),
+        )
+        .unwrap();
+        encrypt_file_in_place(&path).unwrap();
+        let with_new_value =
+            fs::read_to_string(&path)
+                .unwrap()
+                .replacen('}', r#", "new": "not encrypted yet"}"#, 1);
+        fs::write(&path, with_new_value).unwrap();
+
+        let out = decrypt_file(&path, KeySource::PrivateKey(&kp.private_key), false).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains(r#""a": "secret""#));
+        assert!(out.contains(r#""new": "not encrypted yet""#));
     }
 
     #[test]
