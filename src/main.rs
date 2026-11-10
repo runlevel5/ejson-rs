@@ -272,8 +272,37 @@ fn encrypt_action(files: &[PathBuf]) -> Result<(), String> {
             .map_err(|e| format!("Encryption failed: {e}"))?;
 
         println!("Wrote {n} bytes to {}.", file_path.display());
+        warn_plaintext_yaml_scalars(file_path);
     }
     Ok(())
+}
+
+/// Warn about YAML values that stayed in plaintext only because YAML parsed
+/// them as numbers or booleans (e.g. an unquoted `pin: 123456`).
+fn warn_plaintext_yaml_scalars(file_path: &Path) {
+    if !matches!(
+        ejson::FileFormat::from_path(file_path),
+        Ok(ejson::FileFormat::Yaml)
+    ) {
+        return;
+    }
+    let Ok(data) = fs::read(file_path) else {
+        return;
+    };
+    let Ok(paths) = ejson::yaml::plaintext_scalar_paths(&data) else {
+        return;
+    };
+    if paths.is_empty() {
+        return;
+    }
+
+    eprintln!(
+        "warning: {}: these values are numbers or booleans in YAML, so they were \
+         left unencrypted: {}",
+        file_path.display(),
+        paths.join(", ")
+    );
+    eprintln!("         Quote them (e.g. pin: \"123456\") to have them encrypted.");
 }
 
 fn decrypt_action(

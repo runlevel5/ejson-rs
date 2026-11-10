@@ -229,7 +229,7 @@ These rules apply to all formats:
 
 1. **Public key required** — Must have a top-level `_public_key` field. For `v1` it is a 64-character hex key; for `v2` it begins with `v2:` followed by a base64-encoded X25519 public key plus ML-KEM-768 encapsulation key.
 2. **Strings are encrypted** — All string values are encrypted by default
-3. **Other types are not encrypted** — Numbers, booleans, nulls, dates remain plaintext
+3. **Other types are not encrypted** — Numbers, booleans, nulls, dates remain plaintext. In YAML an unquoted `pin: 123456` is a number, so quote secrets that look like numbers (`pin: "123456"`); `ejson encrypt` warns about YAML values it left unencrypted this way
 4. **Underscore prefix skips encryption** — Keys starting with `_` protect their immediate value
 5. **Underscores don't propagate** — Nested values under `_key` are still encrypted unless they also have underscore prefixes
 6. **Arrays work element-by-element** — String arrays have each element encrypted individually

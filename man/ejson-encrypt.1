@@ -49,7 +49,12 @@ field containing a 64-character hex-encoded public key.
 \- All string values are encrypted by default.
 .IP 3. 4
 .B Other types preserved
-\- Numbers, booleans, nulls, and dates remain as plaintext.
+\- Numbers, booleans, nulls, and dates remain as plaintext. In YAML an
+unquoted value such as
+.I "pin: 123456"
+is a number, so quote secrets that look like numbers.
+.B ejson encrypt
+prints a warning listing YAML values that were left unencrypted this way.
 .IP 4. 4
 .B Underscore prefix skips encryption
 \- Keys starting with
