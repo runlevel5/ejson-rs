@@ -27,28 +27,40 @@ pub(crate) fn decode_legacy_public_key(key: &str) -> Option<[u8; KEY_SIZE]> {
 /// either the transformed bytes or the [`CryptoError`] that stopped it.
 pub type WalkAction<'a> = &'a (dyn Fn(&[u8]) -> Result<Vec<u8>, CryptoError> + 'a);
 
-/// Common errors that can occur during format processing.
+/// What can go wrong while reading or rewriting a document, in any format.
 ///
-/// Format-specific handlers can define their own error types that implement
-/// `Into<FormatError>` for integration with the unified error handling.
+/// Messages never quote the document, which may contain secrets.
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum FormatError {
+    /// The document has no top-level `_public_key`.
     #[error("public key not present in file")]
     PublicKeyMissing,
 
+    /// `_public_key` is present but is not a single string.
     #[error("public key has invalid format")]
     PublicKeyInvalid,
 
-    #[error("invalid {format} syntax: {message}")]
+    /// The document is not valid JSON, YAML or TOML. `message` says what is
+    /// wrong and, where known, the line and column.
+    #[error("invalid {format}: {message}")]
     InvalidSyntax {
+        /// `"JSON"`, `"YAML"` or `"TOML"`.
         format: &'static str,
         message: String,
     },
 
-    /// Encrypting or decrypting a value failed; the cause is the `source`.
-    #[error("action failed: {0}")]
-    ActionFailed(#[source] CryptoError),
+    /// Objects and arrays are nested more than `max` levels deep.
+    #[error("invalid {format}: nested more than {max} levels deep")]
+    NestingTooDeep {
+        /// `"JSON"`, `"YAML"` or `"TOML"`.
+        format: &'static str,
+        max: usize,
+    },
+
+    /// Encrypting or decrypting a value failed. The message is the cause's.
+    #[error(transparent)]
+    ActionFailed(#[from] CryptoError),
 }
 
 /// A trait for handling encrypted file formats.

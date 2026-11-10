@@ -12,37 +12,21 @@ use crate::crypto::CryptoError;
 use crate::handler::{
     FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, WalkAction, decode_legacy_public_key,
 };
-use thiserror::Error;
 use toml_edit::{DocumentMut, Item, Value};
 
-/// Errors that can occur during TOML processing.
-#[derive(Error, Debug)]
-#[non_exhaustive]
-pub enum TomlError {
-    #[error("public key not present in ETOML file")]
-    PublicKeyMissing,
-
-    #[error("public key has invalid format")]
-    PublicKeyInvalid,
-
-    #[error("invalid toml: {0}")]
-    InvalidToml(String),
-
-    /// Encrypting or decrypting a value failed; the cause is the `source`.
-    #[error("action failed: {0}")]
-    ActionFailed(#[source] CryptoError),
-}
-
-/// Build an `InvalidToml` error that never quotes the document.
+/// Build a syntax error that never quotes the document.
 ///
 /// The `Display` output of `toml` and `toml_edit` errors includes the offending
 /// source line. In an ETOML file that line is often a plaintext secret, and
 /// when re-parsing decrypted output it is a decrypted one, so only the message
 /// and the line/column are reported.
-pub(crate) fn invalid_toml(src: &str, message: &str, span: Option<Range<usize>>) -> TomlError {
+pub(crate) fn invalid_toml(src: &str, message: &str, span: Option<Range<usize>>) -> FormatError {
     let message = message.trim();
     let Some(span) = span else {
-        return TomlError::InvalidToml(message.to_string());
+        return FormatError::InvalidSyntax {
+            format: "TOML",
+            message: message.to_string(),
+        };
     };
 
     let start = span.start.min(src.len());
@@ -57,39 +41,42 @@ pub(crate) fn invalid_toml(src: &str, message: &str, span: Option<Range<usize>>)
         .map_or(start - line_start, |s| s.chars().count())
         + 1;
 
-    TomlError::InvalidToml(format!("{message} at line {line}, column {column}"))
+    FormatError::InvalidSyntax {
+        format: "TOML",
+        message: format!("{message} at line {line}, column {column}"),
+    }
 }
 
 /// Parse TOML into a `toml::Value`, with errors that don't quote the document.
-pub(crate) fn parse_value(src: &str) -> Result<toml::Value, TomlError> {
+pub(crate) fn parse_value(src: &str) -> Result<toml::Value, FormatError> {
     toml::from_str(src).map_err(|e| invalid_toml(src, e.message(), e.span()))
 }
 
 /// Parse TOML into an editable document, with errors that don't quote it.
-fn parse_document(src: &str) -> Result<DocumentMut, TomlError> {
+fn parse_document(src: &str) -> Result<DocumentMut, FormatError> {
     src.parse::<DocumentMut>()
         .map_err(|e| invalid_toml(src, e.message(), e.span()))
 }
 
 /// Extract the raw `_public_key` string value from an ETOML document.
-pub fn extract_public_key_string(data: &[u8]) -> Result<String, TomlError> {
+pub fn extract_public_key_string(data: &[u8]) -> Result<String, FormatError> {
     let s = String::from_utf8_lossy(data);
     let doc = parse_value(&s)?;
 
     let key_value = doc
         .get(PUBLIC_KEY_FIELD)
-        .ok_or(TomlError::PublicKeyMissing)?;
+        .ok_or(FormatError::PublicKeyMissing)?;
 
     key_value
         .as_str()
         .map(str::to_string)
-        .ok_or(TomlError::PublicKeyInvalid)
+        .ok_or(FormatError::PublicKeyInvalid)
 }
 
 /// Extract the _public_key value from an ETOML document as a legacy 32-byte key.
-pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], TomlError> {
+pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError> {
     let key_str = extract_public_key_string(data)?;
-    decode_legacy_public_key(&key_str).ok_or(TomlError::PublicKeyInvalid)
+    decode_legacy_public_key(&key_str).ok_or(FormatError::PublicKeyInvalid)
 }
 
 /// Walker walks a TOML structure, applying an action to encryptable string values.
@@ -125,7 +112,7 @@ where
     }
 
     /// Walk the TOML data and apply the action to encryptable values.
-    pub fn walk(&self, data: &[u8]) -> Result<Vec<u8>, TomlError> {
+    pub fn walk(&self, data: &[u8]) -> Result<Vec<u8>, FormatError> {
         let s = String::from_utf8_lossy(data);
         let mut doc = parse_document(&s)?;
 
@@ -135,7 +122,7 @@ where
         Ok(doc.to_string().into_bytes())
     }
 
-    fn walk_table(&self, table: &mut toml_edit::Table) -> Result<(), TomlError> {
+    fn walk_table(&self, table: &mut toml_edit::Table) -> Result<(), FormatError> {
         // Collect keys first to avoid borrow issues
         let keys: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
 
@@ -150,7 +137,7 @@ where
         Ok(())
     }
 
-    fn walk_item(&self, item: &mut Item, is_comment: bool) -> Result<(), TomlError> {
+    fn walk_item(&self, item: &mut Item, is_comment: bool) -> Result<(), FormatError> {
         match item {
             Item::Value(value) => self.walk_value(value, is_comment)?,
             Item::Table(table) => {
@@ -167,12 +154,11 @@ where
         Ok(())
     }
 
-    fn walk_value(&self, value: &mut Value, is_comment: bool) -> Result<(), TomlError> {
+    fn walk_value(&self, value: &mut Value, is_comment: bool) -> Result<(), FormatError> {
         match value {
             Value::String(s) if !is_comment => {
                 let plaintext = s.value();
-                let result =
-                    (self.action)(plaintext.as_bytes()).map_err(TomlError::ActionFailed)?;
+                let result = (self.action)(plaintext.as_bytes())?;
                 let result_str = String::from_utf8_lossy(&result).to_string();
                 *s = toml_edit::Formatted::new(result_str);
             }
@@ -200,7 +186,7 @@ where
 
 /// Trim the first leading underscore from all keys in a TOML document.
 /// The `_public_key` field is excluded from trimming.
-pub fn trim_underscore_prefix_from_keys(data: &[u8]) -> Result<Vec<u8>, TomlError> {
+pub fn trim_underscore_prefix_from_keys(data: &[u8]) -> Result<Vec<u8>, FormatError> {
     let s = String::from_utf8_lossy(data);
     let mut doc = parse_document(&s)?;
 
@@ -298,21 +284,6 @@ fn transform_toml_value_keys(value: &mut Value) {
 // FormatHandler trait implementation
 // ============================================================================
 
-/// Convert TomlError to the unified FormatError.
-impl From<TomlError> for FormatError {
-    fn from(err: TomlError) -> Self {
-        match err {
-            TomlError::PublicKeyMissing => FormatError::PublicKeyMissing,
-            TomlError::PublicKeyInvalid => FormatError::PublicKeyInvalid,
-            TomlError::InvalidToml(msg) => FormatError::InvalidSyntax {
-                format: "TOML",
-                message: msg,
-            },
-            TomlError::ActionFailed(source) => FormatError::ActionFailed(source),
-        }
-    }
-}
-
 /// TOML format handler implementing the FormatHandler trait.
 ///
 /// This handler uses `toml_edit` to preserve formatting and comments.
@@ -332,15 +303,15 @@ impl FormatHandler for TomlHandler {
     }
 
     fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError> {
-        extract_public_key_string(data).map_err(Into::into)
+        extract_public_key_string(data)
     }
 
     fn walk(&self, data: &[u8], action: WalkAction<'_>) -> Result<Vec<u8>, FormatError> {
-        Walker::new(action).walk(data).map_err(Into::into)
+        Walker::new(action).walk(data)
     }
 
     fn trim_underscore_prefix_from_keys(&self, data: &[u8]) -> Result<Vec<u8>, FormatError> {
-        trim_underscore_prefix_from_keys(data).map_err(Into::into)
+        trim_underscore_prefix_from_keys(data)
     }
 }
 
@@ -366,7 +337,7 @@ secret = "value"
         let toml = br#"secret = "value""#;
         assert!(matches!(
             extract_public_key(toml),
-            Err(TomlError::PublicKeyMissing)
+            Err(FormatError::PublicKeyMissing)
         ));
     }
 
@@ -520,9 +491,9 @@ normal = "data"
         let src = "a = 1\nb = é x\n";
         let at = src.find('x').unwrap();
         let err = invalid_toml(src, "boom\n", Some(at..at + 1));
-        assert_eq!(err.to_string(), "invalid toml: boom at line 2, column 7");
+        assert_eq!(err.to_string(), "invalid TOML: boom at line 2, column 7");
 
         let err = invalid_toml(src, "boom", None);
-        assert_eq!(err.to_string(), "invalid toml: boom");
+        assert_eq!(err.to_string(), "invalid TOML: boom");
     }
 }

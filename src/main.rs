@@ -667,7 +667,7 @@ mod tests {
                 "Encryption failed: file too large (max 10485760 bytes)",
             ),
             (
-                CliError::Decrypt(ejson::EjsonError::InvalidPrivateKey),
+                CliError::Decrypt(ejson::crypto::CryptoError::InvalidPrivateKey.into()),
                 "Decryption failed: invalid private key",
             ),
             (
