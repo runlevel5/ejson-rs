@@ -107,6 +107,11 @@ where
                     self.walk_value(item, is_comment)?;
                 }
             }
+            // A tag (e.g. `!secret value`) doesn't change whether the value is
+            // encryptable; skipping it here would leave the value in plaintext.
+            Value::Tagged(tagged) => {
+                self.walk_value(&mut tagged.value, is_comment)?;
+            }
             // Non-string values (numbers, booleans, null) are not encrypted
             _ => {}
         }
@@ -172,6 +177,10 @@ fn transform_yaml_keys(value: Value) -> Value {
             Value::Mapping(new_map)
         }
         Value::Sequence(seq) => Value::Sequence(seq.into_iter().map(transform_yaml_keys).collect()),
+        Value::Tagged(mut tagged) => {
+            tagged.value = transform_yaml_keys(tagged.value);
+            Value::Tagged(tagged)
+        }
         other => other,
     }
 }
@@ -351,6 +360,43 @@ ratio: 1.5
         assert!(result_str.contains("port: 8080"));
         assert!(result_str.contains("enabled: true"));
         assert!(result_str.contains("ratio: 1.5"));
+    }
+
+    #[test]
+    fn test_walker_tagged_values() {
+        let yaml = br#"scalar: !secret hunter2
+mapping: !creds
+  password: hunter3
+sequence: !list
+  - hunter4
+_comment: !note leave me
+"#;
+        let walker =
+            Walker::new(|data| Ok(format!("E:{}", String::from_utf8_lossy(data)).into_bytes()));
+
+        let result = walker.walk(yaml).unwrap();
+        let result_str = String::from_utf8_lossy(&result);
+
+        // Tagged values must be encrypted, and the tags preserved
+        assert!(result_str.contains("!secret E:hunter2"));
+        assert!(result_str.contains("!creds"));
+        assert!(result_str.contains("password: E:hunter3"));
+        assert!(result_str.contains("!list"));
+        assert!(result_str.contains("E:hunter4"));
+        // The underscore rule still applies to tagged values
+        assert!(result_str.contains("_comment: !note leave me"));
+    }
+
+    #[test]
+    fn test_trim_underscore_prefix_tagged_mapping() {
+        let yaml = br#"outer: !tag
+  _inner: "value"
+"#;
+        let result = trim_underscore_prefix_from_keys(yaml).unwrap();
+        let result_str = String::from_utf8_lossy(&result);
+
+        assert!(result_str.contains("inner:"));
+        assert!(!result_str.contains("_inner"));
     }
 
     #[test]
