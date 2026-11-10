@@ -37,7 +37,6 @@ pub use crypto::KeyBytes;
 pub use format::FileFormat;
 // Re-export handler trait for implementing custom formats
 use format::FileFormatError;
-use fs4::fs_std::FileExt;
 pub use handler::{FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD};
 use json::JsonError;
 pub use typed::{DecryptedContent, DecryptedValue};
@@ -257,7 +256,7 @@ pub fn encrypt_file_in_place<P: AsRef<Path>>(file_path: P) -> Result<usize, Ejso
     let permissions = metadata.permissions();
 
     // Acquire exclusive lock
-    file.lock_exclusive()?;
+    file.lock()?;
 
     // Read the data while holding the lock
     let mut data = Vec::with_capacity(metadata.len() as usize);
