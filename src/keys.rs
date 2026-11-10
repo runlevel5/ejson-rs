@@ -209,11 +209,7 @@ pub fn generate_keypair_for_scheme(
 }
 
 fn parse_legacy_public_key(s: &str) -> Result<KeyBytes, CryptoError> {
-    if s.len() != 64 {
-        return Err(CryptoError::InvalidKeyLength);
-    }
-    let bytes = hex::decode(s).map_err(|_| CryptoError::InvalidKeyLength)?;
-    bytes.try_into().map_err(|_| CryptoError::InvalidKeyLength)
+    crate::handler::decode_legacy_public_key(s).ok_or(CryptoError::InvalidKeyLength)
 }
 
 fn parse_legacy_private_key(data: &str) -> Result<KeyBytes, CryptoError> {

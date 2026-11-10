@@ -12,6 +12,13 @@ pub const PUBLIC_KEY_FIELD: &str = "_public_key";
 /// Size of the public key in bytes.
 pub const KEY_SIZE: usize = 32;
 
+/// Decode a legacy (`v1`) public key: exactly 64 hex characters.
+pub(crate) fn decode_legacy_public_key(key: &str) -> Option<[u8; KEY_SIZE]> {
+    let mut bytes = [0u8; KEY_SIZE];
+    hex::decode_to_slice(key, &mut bytes).ok()?;
+    Some(bytes)
+}
+
 /// Type alias for the action function used in walk operations.
 ///
 /// This function takes a byte slice (the value to encrypt/decrypt) and returns
@@ -183,6 +190,21 @@ mod tests {
             handler.extract_public_key(b"test"),
             Err(FormatError::PublicKeyMissing)
         ));
+    }
+
+    #[test]
+    fn test_decode_legacy_public_key() {
+        let hex = "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f";
+        let key = decode_legacy_public_key(hex).unwrap();
+        assert_eq!(hex::encode(key), hex);
+        assert_eq!(decode_legacy_public_key(&hex.to_uppercase()), Some(key));
+
+        assert_eq!(decode_legacy_public_key(""), None);
+        assert_eq!(decode_legacy_public_key(&hex[..63]), None);
+        assert_eq!(decode_legacy_public_key(&format!("{hex}0")), None);
+        assert_eq!(decode_legacy_public_key(&format!("{hex}00")), None);
+        assert_eq!(decode_legacy_public_key(&hex.replace('6', "g")), None);
+        assert_eq!(decode_legacy_public_key(&format!(" {}", &hex[1..])), None);
     }
 
     #[test]

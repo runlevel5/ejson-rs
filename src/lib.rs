@@ -643,27 +643,7 @@ pub fn decrypt_bytes_typed(
         output
     };
 
-    // Parse based on format
-    let content = match format {
-        FileFormat::Json => {
-            let value: serde_json::Value =
-                serde_json::from_slice(&decrypted_bytes).map_err(|_| JsonError::InvalidJson)?;
-            DecryptedContent::Json(value)
-        }
-        FileFormat::Yaml => {
-            let value: serde_norway::Value =
-                serde_norway::from_slice(&decrypted_bytes).map_err(yaml::invalid_yaml)?;
-            DecryptedContent::Yaml(value)
-        }
-        FileFormat::Toml => {
-            let s = std::str::from_utf8(&decrypted_bytes)
-                .map_err(|e| TomlError::InvalidToml(e.to_string()))?;
-            let value = toml::parse_value(s)?;
-            DecryptedContent::Toml(value)
-        }
-    };
-
-    Ok(content)
+    parse_decrypted(&decrypted_bytes, format)
 }
 
 /// Decrypt a file and return the decrypted contents as a typed value.
@@ -711,27 +691,24 @@ pub fn decrypt_file_typed<P: AsRef<Path>>(
         trim_underscore_prefix,
     )?);
 
-    // Parse based on format
-    let content = match format {
-        FileFormat::Json => {
-            let value: serde_json::Value =
-                serde_json::from_slice(&decrypted_bytes).map_err(|_| JsonError::InvalidJson)?;
-            DecryptedContent::Json(value)
-        }
+    parse_decrypted(&decrypted_bytes, format)
+}
+
+/// Parse decrypted bytes into the typed value for their format.
+fn parse_decrypted(bytes: &[u8], format: FileFormat) -> Result<DecryptedContent, EjsonError> {
+    Ok(match format {
+        FileFormat::Json => DecryptedContent::Json(
+            serde_json::from_slice(bytes).map_err(|_| JsonError::InvalidJson)?,
+        ),
         FileFormat::Yaml => {
-            let value: serde_norway::Value =
-                serde_norway::from_slice(&decrypted_bytes).map_err(yaml::invalid_yaml)?;
-            DecryptedContent::Yaml(value)
+            DecryptedContent::Yaml(serde_norway::from_slice(bytes).map_err(yaml::invalid_yaml)?)
         }
         FileFormat::Toml => {
-            let s = std::str::from_utf8(&decrypted_bytes)
-                .map_err(|e| TomlError::InvalidToml(e.to_string()))?;
-            let value = toml::parse_value(s)?;
-            DecryptedContent::Toml(value)
+            let s =
+                std::str::from_utf8(bytes).map_err(|e| TomlError::InvalidToml(e.to_string()))?;
+            DecryptedContent::Toml(toml::parse_value(s)?)
         }
-    };
-
-    Ok(content)
+    })
 }
 
 /// Trim the first leading underscore from all keys in the data.

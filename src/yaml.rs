@@ -6,7 +6,9 @@
 //!
 //! The walker uses `serde_norway` for parsing and serialization.
 
-use crate::handler::{FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, WalkAction};
+use crate::handler::{
+    FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, WalkAction, decode_legacy_public_key,
+};
 use serde_norway::{Mapping, Value};
 use thiserror::Error;
 
@@ -80,16 +82,7 @@ pub fn extract_public_key_string(data: &[u8]) -> Result<String, YamlError> {
 /// Extract the _public_key value from an EYAML document as a legacy 32-byte key.
 pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], YamlError> {
     let key_str = extract_public_key_string(data)?;
-
-    if key_str.len() != KEY_SIZE * 2 {
-        return Err(YamlError::PublicKeyInvalid);
-    }
-
-    let key_bytes = hex::decode(&key_str).map_err(|_| YamlError::PublicKeyInvalid)?;
-
-    key_bytes
-        .try_into()
-        .map_err(|_| YamlError::PublicKeyInvalid)
+    decode_legacy_public_key(&key_str).ok_or(YamlError::PublicKeyInvalid)
 }
 
 /// Walker walks a YAML structure, applying an action to encryptable string values.
