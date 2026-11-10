@@ -41,9 +41,9 @@ impl SecretEnvMap {
         self.inner.insert(key, value);
     }
 
-    /// Returns a reference to the value corresponding to the key.
-    pub fn get(&self, key: &str) -> Option<&String> {
-        self.inner.get(key)
+    /// Returns the value for `key`, if present.
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.inner.get(key).map(String::as_str)
     }
 
     /// Returns true if the map is empty.
@@ -56,9 +56,36 @@ impl SecretEnvMap {
         self.inner.len()
     }
 
-    /// Returns an iterator over the key-value pairs.
-    pub fn iter(&self) -> std::collections::btree_map::Iter<'_, String, String> {
-        self.inner.iter()
+    /// Returns an iterator over the `(name, value)` pairs, sorted by name.
+    pub fn iter(&self) -> Iter<'_> {
+        Iter(self.inner.iter())
+    }
+}
+
+/// Iterator over the `(name, value)` pairs of a [`SecretEnvMap`], sorted by name.
+///
+/// Its `Debug` output does not print the values.
+pub struct Iter<'a>(std::collections::btree_map::Iter<'a, String, String>);
+
+impl<'a> Iterator for Iter<'a> {
+    type Item = (&'a str, &'a str);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|(k, v)| (k.as_str(), v.as_str()))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl ExactSizeIterator for Iter<'_> {}
+
+impl std::fmt::Debug for Iter<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Iter")
+            .field("remaining", &self.0.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -96,11 +123,11 @@ impl std::fmt::Debug for SecretEnvMap {
 }
 
 impl<'a> IntoIterator for &'a SecretEnvMap {
-    type Item = (&'a String, &'a String);
-    type IntoIter = std::collections::btree_map::Iter<'a, String, String>;
+    type Item = (&'a str, &'a str);
+    type IntoIter = Iter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.inner.iter()
+        self.iter()
     }
 }
 
@@ -293,7 +320,7 @@ fn export(
     for (k, v) in values {
         // Validate key is a valid shell identifier
         if !is_valid_identifier(k) {
-            return Err(EnvError::InvalidIdentifier(k.clone()));
+            return Err(EnvError::InvalidIdentifier(k.to_string()));
         }
 
         let (filtered, had_control_chars) = filtered_value(v);
@@ -475,11 +502,8 @@ mod tests {
         });
         let content = DecryptedContent::Json(json_value);
         let result = extract_env(&content).unwrap();
-        assert_eq!(result.get("test_key"), Some(&"test_value".to_string()));
-        assert_eq!(
-            result.get("_underscore_key"),
-            Some(&"underscore_value".to_string())
-        );
+        assert_eq!(result.get("test_key"), Some("test_value"));
+        assert_eq!(result.get("_underscore_key"), Some("underscore_value"));
     }
 
     #[test]
@@ -718,6 +742,24 @@ mod tests {
     }
 
     #[test]
+    fn test_secret_env_map_yields_string_slices() {
+        let mut secrets = SecretEnvMap::new();
+        secrets.insert("B".to_string(), "two".to_string());
+        secrets.insert("A".to_string(), "one".to_string());
+
+        let value: Option<&str> = secrets.get("A");
+        assert_eq!(value, Some("one"));
+        assert_eq!(secrets.get("MISSING"), None);
+
+        let iter = secrets.iter();
+        assert_eq!(iter.len(), 2);
+        // The iterator's Debug output must not print the secrets.
+        assert_eq!(format!("{iter:?}"), "Iter { remaining: 2, .. }");
+        let pairs: Vec<(&str, &str)> = iter.collect();
+        assert_eq!(pairs, [("A", "one"), ("B", "two")]);
+    }
+
+    #[test]
     fn test_secret_env_map_into_iterator() {
         let mut secrets = SecretEnvMap::new();
         secrets.insert("ZEBRA".to_string(), "value_z".to_string());
@@ -729,16 +771,12 @@ mod tests {
         assert_eq!(collected.len(), 3);
 
         // Verify iteration order is sorted by key (BTreeMap behavior)
-        let keys: Vec<_> = collected.iter().map(|(k, _)| k.as_str()).collect();
+        let keys: Vec<&str> = collected.iter().map(|(k, _)| *k).collect();
         assert_eq!(keys, vec!["ALPHA", "MIKE", "ZEBRA"]);
 
         // Verify values are correctly associated
-        let pairs: Vec<_> = collected
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect();
         assert_eq!(
-            pairs,
+            collected,
             vec![
                 ("ALPHA", "value_a"),
                 ("MIKE", "value_m"),
