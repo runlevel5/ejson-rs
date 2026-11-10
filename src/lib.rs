@@ -842,7 +842,7 @@ pub fn decrypt_bytes_typed(
         output
     };
 
-    parse_decrypted(&decrypted_bytes, format)
+    Ok(DecryptedContent::parse(&decrypted_bytes, format)?)
 }
 
 /// Decrypt a file and return the decrypted contents as a typed value.
@@ -885,26 +885,7 @@ pub fn decrypt_file_typed<P: AsRef<Path>>(
     // Decrypt to bytes first; wiped once the typed value has been parsed.
     let decrypted_bytes = decrypt_file(file_path, key, underscore_prefix)?;
 
-    parse_decrypted(&decrypted_bytes, format)
-}
-
-/// Parse decrypted bytes into the typed value for their format.
-fn parse_decrypted(bytes: &[u8], format: FileFormat) -> Result<DecryptedContent, EjsonError> {
-    Ok(match format {
-        FileFormat::Json => DecryptedContent::Json(
-            serde_json::from_slice(bytes).map_err(|e| json::json_syntax_error(&e))?,
-        ),
-        FileFormat::Yaml => {
-            DecryptedContent::Yaml(serde_norway::from_slice(bytes).map_err(yaml::invalid_yaml)?)
-        }
-        FileFormat::Toml => {
-            let s = std::str::from_utf8(bytes).map_err(|e| FormatError::InvalidSyntax {
-                format: "TOML",
-                message: e.to_string(),
-            })?;
-            DecryptedContent::Toml(toml::parse_value(s)?)
-        }
-    })
+    Ok(DecryptedContent::parse(&decrypted_bytes, format)?)
 }
 
 /// Trim the first leading underscore from all keys in the data.
