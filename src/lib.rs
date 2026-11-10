@@ -51,7 +51,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::Path;
 
-use crypto::{CryptoError, Keypair};
+use crypto::CryptoError;
 
 // Re-export key type for public API
 pub use crypto::KeyBytes;
@@ -113,20 +113,6 @@ pub enum EjsonError {
 
     #[error("invalid path: {0}")]
     InvalidPath(String),
-}
-
-/// Generate a new ejson keypair.
-///
-/// Returns the public and private keys as hex-encoded strings.
-/// Note: The private key string should be handled securely by the caller.
-#[deprecated(
-    since = "1.1.0",
-    note = "returns the private key in a plain `String` that is never wiped; \
-            use `generate_keypair_for_scheme(\"v1\")`, which returns it in `Zeroizing`"
-)]
-pub fn generate_keypair() -> Result<(String, String), EjsonError> {
-    let kp = Keypair::generate()?;
-    Ok((kp.public_string(), kp.private_hex().to_string()))
 }
 
 /// Generate a new ejson keypair for the named scheme (`v1` or `v2`, plus aliases).
@@ -888,6 +874,7 @@ pub(crate) mod test_log {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::Keypair;
     use tempfile::TempDir;
 
     #[test]
@@ -931,17 +918,9 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
-    fn test_generate_keypair() {
-        let (pub_key, priv_key) = generate_keypair().unwrap();
-        assert_eq!(pub_key.len(), 64);
-        assert_eq!(priv_key.len(), 64);
-    }
-
-    #[test]
     fn test_encrypt_decrypt_roundtrip() {
         // Generate a keypair
-        let kp = Keypair::generate().unwrap();
+        let kp = Keypair::generate();
         let pub_hex = kp.public_string();
         let priv_hex = kp.private_hex().to_string();
 
@@ -981,7 +960,7 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_toml_roundtrip() {
         // Generate a keypair
-        let kp = Keypair::generate().unwrap();
+        let kp = Keypair::generate();
         let pub_hex = kp.public_string();
         let priv_hex = kp.private_hex().to_string();
 
@@ -1031,7 +1010,7 @@ _hint = "password hint"
     #[test]
     fn test_format_detection_in_encrypt_file() {
         // Generate a keypair
-        let kp = Keypair::generate().unwrap();
+        let kp = Keypair::generate();
         let pub_hex = kp.public_string();
 
         // Create a temporary directory
@@ -1058,7 +1037,7 @@ secret = "my secret"
     #[test]
     fn test_encrypt_decrypt_yaml_roundtrip() {
         // Generate a keypair
-        let kp = Keypair::generate().unwrap();
+        let kp = Keypair::generate();
         let pub_hex = kp.public_string();
         let priv_hex = kp.private_hex().to_string();
 
@@ -1108,7 +1087,7 @@ database:
     #[test]
     fn test_format_detection_in_encrypt_yaml_file() {
         // Generate a keypair
-        let kp = Keypair::generate().unwrap();
+        let kp = Keypair::generate();
         let pub_hex = kp.public_string();
 
         // Create a temporary directory
@@ -1133,7 +1112,7 @@ secret: "my secret"
     }
 
     fn write_ejson_fixture(dir: &Path) -> (std::path::PathBuf, String) {
-        let kp = Keypair::generate().unwrap();
+        let kp = Keypair::generate();
         let pub_hex = kp.public_string();
         fs::write(dir.join(&pub_hex), kp.private_hex()).unwrap();
         let path = dir.join("secrets.ejson");
@@ -1403,7 +1382,7 @@ secret: "my secret"
     #[test]
     fn test_decrypt_file_typed_json() {
         // Generate a keypair
-        let kp = Keypair::generate().unwrap();
+        let kp = Keypair::generate();
         let pub_hex = kp.public_string();
         let priv_hex = kp.private_hex().to_string();
 
@@ -1445,7 +1424,7 @@ secret: "my secret"
     #[test]
     fn test_decrypt_file_typed_toml() {
         // Generate a keypair
-        let kp = Keypair::generate().unwrap();
+        let kp = Keypair::generate();
         let pub_hex = kp.public_string();
         let priv_hex = kp.private_hex().to_string();
 
@@ -1493,7 +1472,7 @@ BAZ = "qux"
     #[test]
     fn test_decrypt_file_typed_yaml() {
         // Generate a keypair
-        let kp = Keypair::generate().unwrap();
+        let kp = Keypair::generate();
         let pub_hex = kp.public_string();
         let priv_hex = kp.private_hex().to_string();
 
@@ -1541,7 +1520,7 @@ environment:
     #[test]
     fn test_decrypt_file_typed_ejson2env_pattern() {
         // This test demonstrates the simplified ejson2env pattern
-        let kp = Keypair::generate().unwrap();
+        let kp = Keypair::generate();
         let pub_hex = kp.public_string();
         let priv_hex = kp.private_hex().to_string();
 
@@ -1582,7 +1561,7 @@ environment:
     #[test]
     fn test_decrypt_bytes_typed_json() {
         // Generate a keypair
-        let kp = Keypair::generate().unwrap();
+        let kp = Keypair::generate();
         let pub_hex = kp.public_string();
         let priv_hex = kp.private_hex().to_string();
 
@@ -1623,7 +1602,7 @@ environment:
     #[test]
     fn test_decrypt_bytes_typed_toml() {
         // Generate a keypair
-        let kp = Keypair::generate().unwrap();
+        let kp = Keypair::generate();
         let pub_hex = kp.public_string();
         let priv_hex = kp.private_hex().to_string();
 
@@ -1660,7 +1639,7 @@ BAZ = "qux"
     #[test]
     fn test_decrypt_bytes_typed_yaml() {
         // Generate a keypair
-        let kp = Keypair::generate().unwrap();
+        let kp = Keypair::generate();
         let pub_hex = kp.public_string();
         let priv_hex = kp.private_hex().to_string();
 
@@ -1697,7 +1676,7 @@ environment:
     #[test]
     fn test_decrypt_bytes_typed_with_trim_underscore() {
         // Generate a keypair
-        let kp = Keypair::generate().unwrap();
+        let kp = Keypair::generate();
         let pub_hex = kp.public_string();
         let priv_hex = kp.private_hex().to_string();
 

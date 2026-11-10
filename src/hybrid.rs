@@ -15,10 +15,6 @@
 //! This is the `v2` scheme — the first scheme after the legacy `v1` NaCl box. See the
 //! project README for details.
 
-// This module owns the deprecated-for-external-use secret fields below; its
-// own accesses are intended.
-#![allow(deprecated)]
-
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
@@ -31,7 +27,7 @@ use ml_kem::{Ciphertext, DecapsulationKey, EncapsulationKey, KeyExport, MlKem768
 use sha2::{Digest, Sha256};
 use std::fmt;
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519Public, StaticSecret};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::boxed_message::{
     BoxedMessageError, NONCE_SIZE, SCHEMA_VERSION_HYBRID, is_boxed_message, parse_boxed_envelope,
@@ -156,20 +152,21 @@ impl HybridPublicKey {
 
 /// A hybrid `v2` private key: X25519 private scalar plus the ML-KEM-768 seed, along with
 /// the corresponding public key.
+///
+/// The secret halves can't be read out as bytes;
+/// [`to_file_string`](Self::to_file_string) returns the key as a self-wiping
+/// string for writing to a key file. Both are wiped from memory on drop.
+///
+/// ```compile_fail,E0616
+/// let (_public, private) = ejson::hybrid::generate_hybrid_keypair();
+/// let _seed = private.mlkem_seed; // private field
+/// ```
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct HybridPrivateKey {
-    pub public: HybridPublicKey,
-    #[deprecated(
-        since = "1.1.0",
-        note = "reading this field copies key material out of the zeroizing \
-                `HybridPrivateKey`; it will become private in 2.0. Use `to_file_string()`"
-    )]
-    pub x25519_private: [u8; HYBRID_X25519_KEY_SIZE],
-    #[deprecated(
-        since = "1.1.0",
-        note = "reading this field copies key material out of the zeroizing \
-                `HybridPrivateKey`; it will become private in 2.0. Use `to_file_string()`"
-    )]
-    pub mlkem_seed: [u8; HYBRID_MLKEM_SEED_SIZE],
+    #[zeroize(skip)] // Public key doesn't need zeroizing
+    public: HybridPublicKey,
+    x25519_private: [u8; HYBRID_X25519_KEY_SIZE],
+    mlkem_seed: [u8; HYBRID_MLKEM_SEED_SIZE],
 }
 
 impl fmt::Debug for HybridPrivateKey {
@@ -182,15 +179,12 @@ impl fmt::Debug for HybridPrivateKey {
     }
 }
 
-impl Drop for HybridPrivateKey {
-    fn drop(&mut self) {
-        use zeroize::Zeroize;
-        self.x25519_private.zeroize();
-        self.mlkem_seed.zeroize();
-    }
-}
-
 impl HybridPrivateKey {
+    /// The public key this private key belongs to.
+    pub fn public_key(&self) -> &HybridPublicKey {
+        &self.public
+    }
+
     /// Serialize into the `ejson-key v2` private key file body.
     pub fn to_file_string(&self) -> Zeroizing<String> {
         // Hex-encode the secret components into Zeroizing temporaries so their heap
@@ -289,7 +283,7 @@ impl HybridPrivateKey {
 }
 
 /// Generate a fresh hybrid `v2` keypair.
-pub fn generate_hybrid_keypair() -> Result<(HybridPublicKey, HybridPrivateKey), CryptoError> {
+pub fn generate_hybrid_keypair() -> (HybridPublicKey, HybridPrivateKey) {
     let x_priv = StaticSecret::random();
     let x_pub = X25519Public::from(&x_priv);
 
@@ -312,7 +306,7 @@ pub fn generate_hybrid_keypair() -> Result<(HybridPublicKey, HybridPrivateKey), 
     };
     private.mlkem_seed.copy_from_slice(seed.as_slice());
 
-    Ok((public, private))
+    (public, private)
 }
 
 /// Encrypts individual values to a hybrid `v2` recipient.
@@ -640,7 +634,7 @@ mod tests {
     use super::*;
 
     fn keypair() -> (HybridPublicKey, HybridPrivateKey) {
-        generate_hybrid_keypair().unwrap()
+        generate_hybrid_keypair()
     }
 
     /// Compile-time check that the types holding key material wipe
@@ -649,7 +643,7 @@ mod tests {
     /// Cargo.toml.
     #[test]
     fn test_key_holding_types_zeroize_on_drop() {
-        fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+        fn assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
         assert_zeroize_on_drop::<DecapsulationKey<MlKem768>>();
         assert_zeroize_on_drop::<StaticSecret>();
         assert_zeroize_on_drop::<EphemeralSecret>();
