@@ -521,6 +521,13 @@ fn decrypt_errors() {
     assert_fails_with(&output, "invalid private key");
     assert!(output.stdout.is_empty());
 
+    // More on stdin than any real key.
+    let output = run_with_stdin(
+        fx.decrypt(&path).arg("--key-from-stdin"),
+        &"a".repeat(70_000),
+    );
+    assert_fails_with(&output, "Private key on stdin is larger than 65536 bytes");
+
     // Malformed key on stdin.
     let output = run_with_stdin(fx.decrypt(&path).arg("--key-from-stdin"), "not-a-key");
     assert_fails_with(&output, "invalid private key");
