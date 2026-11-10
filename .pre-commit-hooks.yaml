@@ -4,4 +4,4 @@
   entry: ejson encrypt
   language: rust
   types: [file]
-  files: '\.(ejson|eyaml|eyml|etoml)$'
+  files: '(?i)\.(ejson|eyaml|eyml|etoml)$'
