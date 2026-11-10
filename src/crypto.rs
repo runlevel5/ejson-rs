@@ -228,17 +228,12 @@ impl Encrypter {
 ///
 /// Security: Key material is automatically zeroized when dropped.
 pub struct Decrypter {
+    // Both fields wipe themselves when dropped (`Keypair` is `ZeroizeOnDrop`,
+    // and `SalsaBox` zeroizes its shared key), so no `Drop` impl is needed here.
     keypair: Keypair,
     /// Cache of SalsaBox instances keyed by encrypter public key.
     /// Uses RefCell for interior mutability since decrypt takes &self.
     cache: RefCell<HashMap<KeyBytes, SalsaBox>>,
-}
-
-// Manual Zeroize implementation since we can't derive it with RefCell
-impl Drop for Decrypter {
-    fn drop(&mut self) {
-        self.keypair.private.zeroize();
-    }
 }
 
 // Custom Debug implementation that redacts sensitive data
@@ -325,6 +320,18 @@ mod tests {
         // Second encryption should return same bytes
         let double_encrypted = encrypter.encrypt(&encrypted).unwrap();
         assert_eq!(encrypted, double_encrypted);
+    }
+
+    /// `Decrypter` has no `Drop` of its own: it relies on its fields wiping
+    /// themselves. This fails to build if `Keypair` stops doing so.
+    #[test]
+    fn test_decrypter_fields_wipe_themselves() {
+        fn assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
+        assert_zeroize_on_drop::<Keypair>();
+        // `crypto_box` types have no marker trait, but they do run a
+        // destructor (which zeroizes the key).
+        assert!(std::mem::needs_drop::<SalsaBox>());
+        assert!(std::mem::needs_drop::<SecretKey>());
     }
 
     #[test]
