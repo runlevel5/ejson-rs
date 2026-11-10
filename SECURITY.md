@@ -11,7 +11,7 @@ reporting.
 
 | Version          | Supported |
 | ---------------- | --------- |
-| latest `1.x`     | ✅        |
+| latest `2.x`     | ✅        |
 | older releases   | ❌        |
 
 ## Reporting a vulnerability
