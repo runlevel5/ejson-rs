@@ -70,14 +70,14 @@ use zeroize::Zeroizing;
 /// Where the private key for a document comes from.
 ///
 /// ```no_run
-/// use ejson::KeySource;
+/// use ejson::{KeySource, UnderscorePrefix};
 ///
 /// // Look the key up in a keydir, in the file named after the document's public key:
-/// let plaintext = ejson::decrypt_file("secrets.ejson", KeySource::keydir("/opt/ejson/keys"), false)?;
+/// let plaintext = ejson::decrypt_file("secrets.ejson", KeySource::keydir("/opt/ejson/keys"), UnderscorePrefix::Keep)?;
 ///
 /// // Or supply the private key directly (e.g. fetched from a secrets manager):
 /// let private_key = std::env::var("EJSON_PRIVATE_KEY").unwrap();
-/// let plaintext = ejson::decrypt_file("secrets.ejson", KeySource::PrivateKey(&private_key), false)?;
+/// let plaintext = ejson::decrypt_file("secrets.ejson", KeySource::PrivateKey(&private_key), UnderscorePrefix::Keep)?;
 /// # Ok::<(), ejson::EjsonError>(())
 /// ```
 #[derive(Clone, Copy)]
@@ -105,6 +105,21 @@ impl std::fmt::Debug for KeySource<'_> {
             Self::PrivateKey(_) => f.debug_tuple("PrivateKey").field(&"[REDACTED]").finish(),
         }
     }
+}
+
+/// Whether key names keep their leading underscore in decrypted output.
+///
+/// In a secrets file, a key that starts with `_` (such as `_comment`) is left
+/// unencrypted. `Trim` removes that first underscore from every key name in
+/// the output, except `_public_key`: `_comment` becomes `comment`, `__x`
+/// becomes `_x`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnderscorePrefix {
+    /// Leave key names as written.
+    #[default]
+    Keep,
+    /// Remove the first leading underscore from key names.
+    Trim,
 }
 
 /// Maximum file size for encryption/decryption operations (10 MB).
@@ -257,22 +272,12 @@ fn read_file_with_lock(path: &Path) -> Result<Vec<u8>, EjsonError> {
     Ok(data)
 }
 
-/// Encrypt data from a reader and write to a writer.
+/// Encrypt a document read from `input` and write the result to `output`.
 ///
-/// The input must be valid JSON with a `_public_key` field containing
-/// a hex-encoded 32-byte public key.
-///
-/// This function assumes JSON format. For format detection based on file extension,
-/// use `encrypt_file_in_place`.
-pub fn encrypt<R: Read, W: Write>(mut input: R, mut output: W) -> Result<usize, EjsonError> {
-    // The input is plaintext: wipe it once it has been encrypted.
-    let data = Zeroizing::new(read_to_end_limited(&mut input, MAX_FILE_SIZE, 0)?);
-
-    encrypt_data(&data, &mut output, FileFormat::Json)
-}
-
-/// Encrypt data with a specific format.
-pub fn encrypt_with_format<R: Read, W: Write>(
+/// The document must be in `format` and have a top-level `_public_key`. Returns
+/// the number of bytes written. To encrypt a file, detecting the format from
+/// its extension, use [`encrypt_file_in_place`].
+pub fn encrypt<R: Read, W: Write>(
     mut input: R,
     mut output: W,
     format: FileFormat,
@@ -519,25 +524,12 @@ fn create_temp_file(dir: &Path, name: &str) -> Result<(std::path::PathBuf, File)
     }
 }
 
-/// Decrypt data from a reader and write to a writer.
+/// Decrypt a document read from `input` and write the plaintext to `output`.
 ///
-/// `key` says where the private key comes from: a keydir or the key itself
-/// (see [`KeySource`]).
-///
-/// This function assumes JSON format. For format detection based on file extension,
-/// use `decrypt_file`.
+/// The document must be in `format`. `key` says where the private key comes
+/// from: a keydir or the key itself (see [`KeySource`]). To decrypt a file,
+/// detecting the format from its extension, use [`decrypt_file`].
 pub fn decrypt<R: Read, W: Write>(
-    mut input: R,
-    mut output: W,
-    key: KeySource<'_>,
-) -> Result<(), EjsonError> {
-    let data = read_to_end_limited(&mut input, MAX_FILE_SIZE, 0)?;
-
-    decrypt_data(&data, &mut output, key, FileFormat::Json)
-}
-
-/// Decrypt data with a specific format.
-pub fn decrypt_with_format<R: Read, W: Write>(
     mut input: R,
     mut output: W,
     key: KeySource<'_>,
@@ -588,32 +580,33 @@ fn decrypt_data<W: Write>(
 /// - `.etoml` or `.toml` -> TOML format
 /// - `.eyaml`, `.eyml`, `.yaml`, or `.yml` -> YAML format
 ///
-/// If `trim_underscore_prefix` is true, the first leading underscore will be
-/// stripped from all keys in the output.
+/// `underscore_prefix` says whether key names keep their leading underscore
+/// in the output (see [`UnderscorePrefix`]).
 ///
-/// Security: Uses file locking and size limits.
+/// Security: Uses file locking and size limits. The plaintext is returned in a
+/// buffer that is wiped from memory when dropped.
 pub fn decrypt_file<P: AsRef<Path>>(
     file_path: P,
     key: KeySource<'_>,
-    trim_underscore_prefix: bool,
-) -> Result<Vec<u8>, EjsonError> {
+    underscore_prefix: UnderscorePrefix,
+) -> Result<Zeroizing<Vec<u8>>, EjsonError> {
     let file_path = file_path.as_ref();
     let format = FileFormat::from_path(file_path)?;
     let data = read_file_with_lock(file_path)?;
     let mut output = Zeroizing::new(Vec::new());
     decrypt_data(&data, &mut *output, key, format)?;
 
-    if trim_underscore_prefix {
+    if underscore_prefix == UnderscorePrefix::Trim {
         // The untrimmed copy is wiped when `output` is replaced.
         output = Zeroizing::new(trim_underscore_prefix_from_keys(&output, format)?);
     }
 
-    Ok(std::mem::take(&mut *output))
+    Ok(output)
 }
 
 /// Decrypt bytes and return the decrypted contents as a typed value.
 ///
-/// This function is similar to [`decrypt_with_format`], but instead of returning raw bytes,
+/// This function is similar to [`decrypt`], but instead of returning raw bytes,
 /// it returns a [`DecryptedContent`] enum that provides format-agnostic access to
 /// the decrypted data.
 ///
@@ -623,11 +616,11 @@ pub fn decrypt_file<P: AsRef<Path>>(
 /// # Example
 ///
 /// ```no_run
-/// use ejson::{decrypt_bytes_typed, DecryptedContent, KeySource, format::FileFormat};
+/// use ejson::{decrypt_bytes_typed, DecryptedContent, KeySource, UnderscorePrefix, format::FileFormat};
 ///
 /// let encrypted_data = b"{\"_public_key\": \"...\", \"secret\": \"EJ[...]\"}";
 /// let key = KeySource::keydir("/opt/ejson/keys");
-/// let content = decrypt_bytes_typed(encrypted_data, key, FileFormat::Json, false)?;
+/// let content = decrypt_bytes_typed(encrypted_data, key, FileFormat::Json, UnderscorePrefix::Keep)?;
 ///
 /// // Access values uniformly regardless of JSON/YAML/TOML format
 /// if let Some(env) = content.get("environment") {
@@ -645,7 +638,7 @@ pub fn decrypt_bytes_typed(
     data: &[u8],
     key: KeySource<'_>,
     format: FileFormat,
-    trim_underscore_prefix: bool,
+    underscore_prefix: UnderscorePrefix,
 ) -> Result<DecryptedContent, EjsonError> {
     // Check size limit
     if data.len() as u64 > MAX_FILE_SIZE {
@@ -657,7 +650,7 @@ pub fn decrypt_bytes_typed(
     let mut output = Zeroizing::new(Vec::new());
     decrypt_data(data, &mut *output, key, format)?;
 
-    let decrypted_bytes = if trim_underscore_prefix {
+    let decrypted_bytes = if underscore_prefix == UnderscorePrefix::Trim {
         Zeroizing::new(trim_underscore_prefix_from_keys(&output, format)?)
     } else {
         output
@@ -678,10 +671,10 @@ pub fn decrypt_bytes_typed(
 /// # Example
 ///
 /// ```no_run
-/// use ejson::{decrypt_file_typed, DecryptedContent, KeySource};
+/// use ejson::{decrypt_file_typed, DecryptedContent, KeySource, UnderscorePrefix};
 ///
 /// let key = KeySource::keydir("/opt/ejson/keys");
-/// let content = decrypt_file_typed("secrets.ejson", key, false)?;
+/// let content = decrypt_file_typed("secrets.ejson", key, UnderscorePrefix::Keep)?;
 ///
 /// // Access values uniformly regardless of JSON/YAML/TOML format
 /// if let Some(env) = content.get("environment") {
@@ -698,13 +691,13 @@ pub fn decrypt_bytes_typed(
 pub fn decrypt_file_typed<P: AsRef<Path>>(
     file_path: P,
     key: KeySource<'_>,
-    trim_underscore_prefix: bool,
+    underscore_prefix: UnderscorePrefix,
 ) -> Result<DecryptedContent, EjsonError> {
     let file_path = file_path.as_ref();
     let format = FileFormat::from_path(file_path)?;
 
     // Decrypt to bytes first; wiped once the typed value has been parsed.
-    let decrypted_bytes = Zeroizing::new(decrypt_file(file_path, key, trim_underscore_prefix)?);
+    let decrypted_bytes = decrypt_file(file_path, key, underscore_prefix)?;
 
     parse_decrypted(&decrypted_bytes, format)
 }
@@ -954,7 +947,7 @@ mod tests {
 
         // Encrypt
         let mut encrypted = Vec::new();
-        encrypt(json.as_bytes(), &mut encrypted).unwrap();
+        encrypt(json.as_bytes(), &mut encrypted, FileFormat::Json).unwrap();
         let encrypted_str = String::from_utf8_lossy(&encrypted);
 
         // Verify encryption happened
@@ -964,7 +957,13 @@ mod tests {
 
         // Decrypt
         let mut decrypted = Vec::new();
-        decrypt(&encrypted[..], &mut decrypted, KeySource::keydir(keydir)).unwrap();
+        decrypt(
+            &encrypted[..],
+            &mut decrypted,
+            KeySource::keydir(keydir),
+            FileFormat::Json,
+        )
+        .unwrap();
         let decrypted_str = String::from_utf8_lossy(&decrypted);
 
         // Verify decryption
@@ -1001,7 +1000,7 @@ _hint = "password hint"
 
         // Encrypt
         let mut encrypted = Vec::new();
-        encrypt_with_format(toml_content.as_bytes(), &mut encrypted, FileFormat::Toml).unwrap();
+        encrypt(toml_content.as_bytes(), &mut encrypted, FileFormat::Toml).unwrap();
         let encrypted_str = String::from_utf8_lossy(&encrypted);
 
         // Verify encryption happened
@@ -1013,7 +1012,7 @@ _hint = "password hint"
 
         // Decrypt
         let mut decrypted = Vec::new();
-        decrypt_with_format(
+        decrypt(
             &encrypted[..],
             &mut decrypted,
             KeySource::keydir(keydir),
@@ -1084,7 +1083,7 @@ database:
 
         // Encrypt
         let mut encrypted = Vec::new();
-        encrypt_with_format(yaml_content.as_bytes(), &mut encrypted, FileFormat::Yaml).unwrap();
+        encrypt(yaml_content.as_bytes(), &mut encrypted, FileFormat::Yaml).unwrap();
         let encrypted_str = String::from_utf8_lossy(&encrypted);
 
         // Verify encryption happened
@@ -1096,7 +1095,7 @@ database:
 
         // Decrypt
         let mut decrypted = Vec::new();
-        decrypt_with_format(
+        decrypt(
             &encrypted[..],
             &mut decrypted,
             KeySource::keydir(keydir),
@@ -1265,8 +1264,13 @@ secret: "my secret"
             }
         });
 
-        let out = decrypt_file(&path, KeySource::Keydir(temp_dir.path()), false).unwrap();
-        let out = String::from_utf8(out).unwrap();
+        let out = decrypt_file(
+            &path,
+            KeySource::Keydir(temp_dir.path()),
+            UnderscorePrefix::Keep,
+        )
+        .unwrap();
+        let out = String::from_utf8(out.to_vec()).unwrap();
         assert!(out.contains("my secret"));
         assert!(out.contains(&pub_hex));
     }
@@ -1326,6 +1330,40 @@ secret: "my secret"
     }
 
     #[test]
+    fn test_decrypt_file_underscore_prefix() {
+        let temp_dir = TempDir::new().unwrap();
+        let kp = generate_keypair(Scheme::V1);
+        let key = KeySource::PrivateKey(&kp.private_key);
+        let path = temp_dir.path().join("s.ejson");
+        fs::write(
+            &path,
+            format!(
+                r#"{{"_public_key": "{}", "_note": "plain", "__x": "y", "a": "secret"}}"#,
+                kp.public_key
+            ),
+        )
+        .unwrap();
+        encrypt_file_in_place(&path).unwrap();
+
+        assert_eq!(UnderscorePrefix::default(), UnderscorePrefix::Keep);
+
+        // The plaintext comes back in a buffer that wipes itself on drop.
+        let kept: Zeroizing<Vec<u8>> = decrypt_file(&path, key, UnderscorePrefix::Keep).unwrap();
+        let kept = String::from_utf8(kept.to_vec()).unwrap();
+        assert!(kept.contains(r#""_note": "plain""#));
+        assert!(kept.contains(r#""__x": "y""#));
+
+        let trimmed = decrypt_file(&path, key, UnderscorePrefix::Trim).unwrap();
+        let trimmed: serde_json::Value = serde_json::from_slice(&trimmed).unwrap();
+        assert_eq!(trimmed["note"], "plain");
+        assert_eq!(trimmed["_x"], "y");
+        assert_eq!(trimmed["a"], "secret");
+        // `_public_key` keeps its underscore.
+        assert_eq!(trimmed["_public_key"], kp.public_key);
+        assert!(trimmed.get("_note").is_none());
+    }
+
+    #[test]
     fn test_key_source_debug_redacts_the_private_key() {
         let keydir = KeySource::keydir("/opt/ejson/keys");
         assert_eq!(format!("{keydir:?}"), r#"Keydir("/opt/ejson/keys")"#);
@@ -1341,9 +1379,16 @@ secret: "my secret"
         encrypt_file_in_place(&path).unwrap();
 
         // The matching key is sitting in what used to be the fallback keydir.
-        assert!(decrypt_file(&path, KeySource::Keydir(temp_dir.path()), false).is_ok());
+        assert!(
+            decrypt_file(
+                &path,
+                KeySource::Keydir(temp_dir.path()),
+                UnderscorePrefix::Keep
+            )
+            .is_ok()
+        );
         assert!(matches!(
-            decrypt_file(&path, KeySource::PrivateKey(""), false),
+            decrypt_file(&path, KeySource::PrivateKey(""), UnderscorePrefix::Keep),
             Err(EjsonError::Crypto(CryptoError::InvalidPrivateKey))
         ));
     }
@@ -1372,7 +1417,7 @@ secret: "my secret"
             fs::write(&path, doc.replace("PUB", &kp.public_key)).unwrap();
             encrypt_file_in_place(&path).unwrap();
             let encrypted = fs::read_to_string(&path).unwrap();
-            assert!(decrypt_file(&path, key, false).is_ok());
+            assert!(decrypt_file(&path, key, UnderscorePrefix::Keep).is_ok());
 
             for damaged in [
                 // one extra character in the encrypter's public key
@@ -1384,7 +1429,7 @@ secret: "my secret"
 
                 // Decrypt fails instead of printing the value unchanged...
                 assert!(
-                    is_damaged_message_error(&decrypt_file(&path, key, false)),
+                    is_damaged_message_error(&decrypt_file(&path, key, UnderscorePrefix::Keep)),
                     "{name}"
                 );
                 // ...and encrypt refuses to wrap it in a second layer,
@@ -1416,8 +1461,13 @@ secret: "my secret"
                 .replacen('}', r#", "new": "not encrypted yet"}"#, 1);
         fs::write(&path, with_new_value).unwrap();
 
-        let out = decrypt_file(&path, KeySource::PrivateKey(&kp.private_key), false).unwrap();
-        let out = String::from_utf8(out).unwrap();
+        let out = decrypt_file(
+            &path,
+            KeySource::PrivateKey(&kp.private_key),
+            UnderscorePrefix::Keep,
+        )
+        .unwrap();
+        let out = String::from_utf8(out.to_vec()).unwrap();
         assert!(out.contains(r#""a": "secret""#));
         assert!(out.contains(r#""new": "not encrypted yet""#));
     }
@@ -1439,8 +1489,12 @@ secret: "my secret"
             fs::write(&path, doc.replace("PUB", &kp.public_key)).unwrap();
             encrypt_file_in_place(&path).unwrap();
 
-            let err =
-                decrypt_file(&path, KeySource::PrivateKey(&other.private_key), false).unwrap_err();
+            let err = decrypt_file(
+                &path,
+                KeySource::PrivateKey(&other.private_key),
+                UnderscorePrefix::Keep,
+            )
+            .unwrap_err();
 
             // The cause can be matched on, not just read as text...
             assert!(
@@ -1510,7 +1564,11 @@ secret: "my secret"
         std::os::unix::fs::symlink("/dev/zero", &link).unwrap();
 
         assert!(matches!(
-            decrypt_file(&link, KeySource::keydir("/nonexistent"), false),
+            decrypt_file(
+                &link,
+                KeySource::keydir("/nonexistent"),
+                UnderscorePrefix::Keep
+            ),
             Err(EjsonError::InvalidPath(_))
         ));
         assert!(matches!(
@@ -1587,7 +1645,12 @@ secret: "my secret"
         encrypt_file_in_place(&json_path).unwrap();
 
         // Decrypt with typed API
-        let content = decrypt_file_typed(&json_path, KeySource::keydir(keydir), false).unwrap();
+        let content = decrypt_file_typed(
+            &json_path,
+            KeySource::keydir(keydir),
+            UnderscorePrefix::Keep,
+        )
+        .unwrap();
 
         // Access using unified API
         let env = content.get("environment").expect("should have environment");
@@ -1635,7 +1698,12 @@ BAZ = "qux"
         encrypt_file_in_place(&toml_path).unwrap();
 
         // Decrypt with typed API
-        let content = decrypt_file_typed(&toml_path, KeySource::keydir(keydir), false).unwrap();
+        let content = decrypt_file_typed(
+            &toml_path,
+            KeySource::keydir(keydir),
+            UnderscorePrefix::Keep,
+        )
+        .unwrap();
 
         // Access using unified API
         let env = content.get("environment").expect("should have environment");
@@ -1683,7 +1751,12 @@ environment:
         encrypt_file_in_place(&yaml_path).unwrap();
 
         // Decrypt with typed API
-        let content = decrypt_file_typed(&yaml_path, KeySource::keydir(keydir), false).unwrap();
+        let content = decrypt_file_typed(
+            &yaml_path,
+            KeySource::keydir(keydir),
+            UnderscorePrefix::Keep,
+        )
+        .unwrap();
 
         // Access using unified API
         let env = content.get("environment").expect("should have environment");
@@ -1722,7 +1795,12 @@ environment:
         encrypt_file_in_place(&json_path).unwrap();
 
         // Simulate ejson2env extraction
-        let content = decrypt_file_typed(&json_path, KeySource::keydir(keydir), false).unwrap();
+        let content = decrypt_file_typed(
+            &json_path,
+            KeySource::keydir(keydir),
+            UnderscorePrefix::Keep,
+        )
+        .unwrap();
 
         // The pattern that ejson2env would use
         let env_secrets: std::collections::HashMap<String, String> = content
@@ -1762,14 +1840,14 @@ environment:
             r#"{{"_public_key": "{pub_hex}", "environment": {{"FOO": "bar", "BAZ": "qux"}}, "secret": "value"}}"#
         );
         let mut encrypted = Vec::new();
-        encrypt(json_content.as_bytes(), &mut encrypted).unwrap();
+        encrypt(json_content.as_bytes(), &mut encrypted, FileFormat::Json).unwrap();
 
         // Decrypt bytes with typed API
         let content = decrypt_bytes_typed(
             &encrypted,
             KeySource::keydir(keydir),
             FileFormat::Json,
-            false,
+            UnderscorePrefix::Keep,
         )
         .unwrap();
 
@@ -1815,14 +1893,14 @@ BAZ = "qux"
 "#
         );
         let mut encrypted = Vec::new();
-        encrypt_with_format(toml_content.as_bytes(), &mut encrypted, FileFormat::Toml).unwrap();
+        encrypt(toml_content.as_bytes(), &mut encrypted, FileFormat::Toml).unwrap();
 
         // Decrypt bytes with typed API
         let content = decrypt_bytes_typed(
             &encrypted,
             KeySource::keydir(keydir),
             FileFormat::Toml,
-            false,
+            UnderscorePrefix::Keep,
         )
         .unwrap();
 
@@ -1858,14 +1936,14 @@ environment:
 "#
         );
         let mut encrypted = Vec::new();
-        encrypt_with_format(yaml_content.as_bytes(), &mut encrypted, FileFormat::Yaml).unwrap();
+        encrypt(yaml_content.as_bytes(), &mut encrypted, FileFormat::Yaml).unwrap();
 
         // Decrypt bytes with typed API
         let content = decrypt_bytes_typed(
             &encrypted,
             KeySource::keydir(keydir),
             FileFormat::Yaml,
-            false,
+            UnderscorePrefix::Keep,
         )
         .unwrap();
 
@@ -1894,14 +1972,14 @@ environment:
         let json_content =
             format!(r#"{{"_public_key": "{pub_hex}", "_environment": {{"_FOO": "bar"}}}}"#);
         let mut encrypted = Vec::new();
-        encrypt(json_content.as_bytes(), &mut encrypted).unwrap();
+        encrypt(json_content.as_bytes(), &mut encrypted, FileFormat::Json).unwrap();
 
         // Decrypt bytes with typed API and trim underscore prefix
         let content = decrypt_bytes_typed(
             &encrypted,
             KeySource::keydir(keydir),
             FileFormat::Json,
-            true,
+            UnderscorePrefix::Trim,
         )
         .unwrap();
 
@@ -1943,11 +2021,21 @@ environment:
         assert!(ciphertext.contains(r#""_comment": "plaintext""#));
 
         // Decrypt via the keydir.
-        let out = decrypt_file(&ejson_path, KeySource::keydir(keydir), false).unwrap();
-        assert_eq!(String::from_utf8(out).unwrap(), original);
+        let out = decrypt_file(
+            &ejson_path,
+            KeySource::keydir(keydir),
+            UnderscorePrefix::Keep,
+        )
+        .unwrap();
+        assert_eq!(String::from_utf8(out.to_vec()).unwrap(), original);
 
         // Decrypt via a user-supplied (multi-line) private key, ignoring the keydir.
-        let out = decrypt_file(&ejson_path, KeySource::PrivateKey(&priv_key), false).unwrap();
-        assert_eq!(String::from_utf8(out).unwrap(), original);
+        let out = decrypt_file(
+            &ejson_path,
+            KeySource::PrivateKey(&priv_key),
+            UnderscorePrefix::Keep,
+        )
+        .unwrap();
+        assert_eq!(String::from_utf8(out.to_vec()).unwrap(), original);
     }
 }
