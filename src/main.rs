@@ -16,7 +16,7 @@ use ejson::env::{
     ExportFunction, export_env, export_env_auto, export_env_fish, export_quiet, export_quiet_auto,
     export_quiet_fish, read_and_export_env,
 };
-use ejson::{GeneratedKeypair, Scheme};
+use ejson::{GeneratedKeypair, KeySource, Scheme};
 use zeroize::Zeroizing;
 
 /// Which shell syntax to emit environment variable assignments in.
@@ -50,7 +50,7 @@ struct KeydirArgs {
         default_value = "/opt/ejson/keys",
         env = "EJSON_KEYDIR"
     )]
-    keydir: String,
+    keydir: PathBuf,
 }
 
 #[derive(Subcommand)]
@@ -240,7 +240,7 @@ fn disable_core_dumps() {
     }
 }
 
-fn keygen_action(keydir: &str, write_flag: bool, scheme: Scheme) -> Result<(), String> {
+fn keygen_action(keydir: &Path, write_flag: bool, scheme: Scheme) -> Result<(), String> {
     let GeneratedKeypair {
         public_key: pub_key,
         private_key: priv_key,
@@ -249,16 +249,15 @@ fn keygen_action(keydir: &str, write_flag: bool, scheme: Scheme) -> Result<(), S
     } = ejson::generate_keypair(scheme);
 
     if write_flag {
-        let keydir_path = Path::new(keydir);
         // The keydir filename is the key ID (the hex public key for v1, a short id for v2).
-        let key_file = keydir_path.join(&key_id);
+        let key_file = keydir.join(&key_id);
 
         // Ensure keydir exists. Directories we create are not world-accessible;
         // the group keeps access to match the 0o440 key files.
         fs::DirBuilder::new()
             .recursive(true)
             .mode(0o750)
-            .create(keydir_path)
+            .create(keydir)
             .map_err(|e| format!("Failed to create keydir: {e}"))?;
 
         // Write private key with restrictive permissions
@@ -337,18 +336,17 @@ fn warn_plaintext_yaml_scalars(file_path: &Path) {
 
 fn decrypt_action(
     file: &Path,
-    keydir: &str,
+    keydir: &Path,
     output: Option<&Path>,
     key_from_stdin: bool,
     trim_underscore_prefix: bool,
 ) -> Result<(), String> {
-    let user_supplied_private_key = user_supplied_private_key(key_from_stdin)?;
+    let stdin_key = key_from_stdin_if(key_from_stdin)?;
 
     let decrypted = Zeroizing::new(
         ejson::decrypt_file(
             file,
-            keydir,
-            &user_supplied_private_key,
+            key_source(keydir, stdin_key.as_ref()),
             trim_underscore_prefix,
         )
         .map_err(|e| format!("Decryption failed: {e}"))?,
@@ -368,15 +366,15 @@ fn decrypt_action(
     Ok(())
 }
 
-/// The private key to pass to the library: read from stdin with
-/// `--key-from-stdin`, otherwise empty, which makes the library look the key up
-/// in the keydir. Held in `Zeroizing` so it is wiped from memory on drop.
-fn user_supplied_private_key(key_from_stdin: bool) -> Result<Zeroizing<String>, String> {
-    if key_from_stdin {
-        read_key_from_stdin()
-    } else {
-        Ok(Zeroizing::new(String::new()))
-    }
+/// The private key from stdin, if `--key-from-stdin` was given. Held in
+/// `Zeroizing` so it is wiped from memory on drop.
+fn key_from_stdin_if(key_from_stdin: bool) -> Result<Option<Zeroizing<String>>, String> {
+    key_from_stdin.then(read_key_from_stdin).transpose()
+}
+
+/// Use the key from stdin if there is one, otherwise look it up in the keydir.
+fn key_source<'a>(keydir: &'a Path, stdin_key: Option<&'a Zeroizing<String>>) -> KeySource<'a> {
+    stdin_key.map_or(KeySource::Keydir(keydir), |key| KeySource::PrivateKey(key))
 }
 
 /// Read a private key from stdin, refusing input larger than any real key.
@@ -397,13 +395,13 @@ fn read_key_from_stdin() -> Result<Zeroizing<String>, String> {
 
 fn env_action(
     file: &Path,
-    keydir: &str,
+    keydir: &Path,
     key_from_stdin: bool,
     quiet: bool,
     shell: ShellArg,
     trim_underscore_prefix: bool,
 ) -> Result<(), String> {
-    let user_supplied_private_key = user_supplied_private_key(key_from_stdin)?;
+    let stdin_key = key_from_stdin_if(key_from_stdin)?;
 
     // Select the export function based on flags
     let export_func: ExportFunction = match (shell, quiet) {
@@ -421,8 +419,7 @@ fn env_action(
     // Execute with the trim flag passed to the library
     read_and_export_env(
         file,
-        keydir,
-        &user_supplied_private_key,
+        key_source(keydir, stdin_key.as_ref()),
         trim_underscore_prefix,
         export_func,
         &mut stdout,
@@ -512,7 +509,7 @@ mod tests {
         // Run decrypt_action with output file
         decrypt_action(
             &ejson_path,
-            keydir.path().to_str().unwrap(),
+            keydir.path(),
             Some(output_path.as_path()),
             false,
             false,
@@ -543,7 +540,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let temp_dir = TempDir::new().unwrap();
-        let keydir = temp_dir.path().to_str().unwrap();
+        let keydir = temp_dir.path();
 
         // Run keygen with write flag
         keygen_action(keydir, true, Scheme::V1).unwrap();
@@ -573,7 +570,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let keydir = temp_dir.path().join("a").join("keys");
 
-        keygen_action(keydir.to_str().unwrap(), true, Scheme::V1).unwrap();
+        keygen_action(&keydir, true, Scheme::V1).unwrap();
 
         for dir in [keydir.parent().unwrap(), keydir.as_path()] {
             let mode = fs::metadata(dir).unwrap().permissions().mode() & 0o777;
@@ -587,7 +584,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let temp_dir = TempDir::new().unwrap();
-        let keydir = temp_dir.path().to_str().unwrap();
+        let keydir = temp_dir.path();
 
         keygen_action(keydir, true, Scheme::V2).unwrap();
 
@@ -618,7 +615,7 @@ mod tests {
 
         decrypt_action(
             &ejson_path,
-            keydir.path().to_str().unwrap(),
+            keydir.path(),
             Some(output_path.as_path()),
             false,
             false,
@@ -642,7 +639,7 @@ mod tests {
         // Decrypt should overwrite atomically
         decrypt_action(
             &ejson_path,
-            keydir.path().to_str().unwrap(),
+            keydir.path(),
             Some(output_path.as_path()),
             false,
             false,

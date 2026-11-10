@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::Path;
 
-use crate::EjsonError;
 use crate::typed::DecryptedContent;
+use crate::{EjsonError, KeySource};
 use thiserror::Error;
 use zeroize::Zeroize;
 
@@ -177,12 +177,10 @@ pub fn extract_env(content: &DecryptedContent) -> Result<SecretEnvMap, EnvError>
 /// Security: The returned SecretEnvMap will automatically zeroize all values when dropped.
 pub fn read_and_extract_env<P: AsRef<Path>>(
     file_path: P,
-    keydir: &str,
-    private_key: &str,
+    key: KeySource<'_>,
     trim_underscore_prefix: bool,
 ) -> Result<SecretEnvMap, EnvError> {
-    let content =
-        crate::decrypt_file_typed(file_path, keydir, private_key, trim_underscore_prefix)?;
+    let content = crate::decrypt_file_typed(file_path, key, trim_underscore_prefix)?;
 
     extract_env(&content)
 }
@@ -195,18 +193,16 @@ pub fn read_and_extract_env<P: AsRef<Path>>(
 /// Security: All secret values are automatically zeroized when dropped.
 pub fn read_and_export_env<P: AsRef<Path>, W: Write>(
     file_path: P,
-    keydir: &str,
-    private_key: &str,
+    key: KeySource<'_>,
     trim_underscore_prefix: bool,
     export_func: ExportFunction,
     output: &mut W,
 ) -> Result<(), EnvError> {
-    let env_values =
-        match read_and_extract_env(&file_path, keydir, private_key, trim_underscore_prefix) {
-            Ok(values) => values,
-            Err(e) if is_env_error(&e) => SecretEnvMap::new(),
-            Err(e) => return Err(e),
-        };
+    let env_values = match read_and_extract_env(&file_path, key, trim_underscore_prefix) {
+        Ok(values) => values,
+        Err(e) if is_env_error(&e) => SecretEnvMap::new(),
+        Err(e) => return Err(e),
+    };
 
     export_func(output, &env_values)
 }
@@ -666,8 +662,7 @@ mod tests {
         let mut output = Vec::new();
         let err = read_and_export_env(
             "does-not-exist.ejson",
-            "/nonexistent",
-            "",
+            KeySource::keydir("/nonexistent"),
             false,
             export_env,
             &mut output,

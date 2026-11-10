@@ -6,7 +6,7 @@
 use std::sync::OnceLock;
 
 use ejson::format::FileFormat;
-use ejson::{Scheme, decrypt_bytes_typed, generate_keypair};
+use ejson::{KeySource, Scheme, decrypt_bytes_typed, generate_keypair};
 use libfuzzer_sys::fuzz_target;
 
 struct Key {
@@ -43,6 +43,7 @@ fuzz_target!(|input: (u8, &[u8])| {
     };
     let doc = body.replace("PUBKEY", &key.public);
 
-    let _ = decrypt_bytes_typed(doc.as_bytes(), "/nonexistent", &key.private, format, false);
-    let _ = decrypt_bytes_typed(doc.as_bytes(), "/nonexistent", &key.private, format, true);
+    let source = KeySource::PrivateKey(&key.private);
+    let _ = decrypt_bytes_typed(doc.as_bytes(), source, format, false);
+    let _ = decrypt_bytes_typed(doc.as_bytes(), source, format, true);
 });
