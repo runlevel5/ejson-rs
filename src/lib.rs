@@ -1,17 +1,27 @@
 //! EJSON - Encrypted JSON secrets management.
 //!
 //! This crate provides utilities for managing encrypted secrets in source control
-//! using public-key cryptography (NaCl Box).
+//! using public-key cryptography: NaCl box (`v1`) or hybrid X25519 + ML-KEM-768
+//! (`v2`).
 //!
 //! Supports JSON (.ejson, .json), TOML (.etoml, .toml), and YAML (.eyaml, .eyml, .yaml, .yml) file formats.
 //!
 //! # Security Features
 //!
-//! - Private keys are zeroized from memory when dropped
-//! - File operations use locking to prevent race conditions
-//! - Path traversal attacks are prevented through validation
-//! - Maximum file size limits prevent denial of service
-//! - Constant-time comparisons for key validation
+//! - Private key material is zeroized from memory when dropped (best effort;
+//!   see the individual types)
+//! - Files are locked while being read or encrypted, and encrypted files are
+//!   replaced atomically
+//! - Only regular files are read: devices, FIFOs and sockets are rejected,
+//!   including through symlinks
+//! - Private keys are looked up by a filename derived from the public key and
+//!   must resolve to a file inside the keydir
+//! - Input files are limited to [`MAX_FILE_SIZE`] and keys to
+//!   [`MAX_KEY_FILE_SIZE`], enforced while reading
+//!
+//! Ciphertext authentication (Poly1305) is verified by the RustCrypto
+//! implementations, which compare tags in constant time. ejson itself does no
+//! other secret-dependent comparisons.
 
 pub mod boxed_message;
 pub mod crypto;
@@ -122,7 +132,12 @@ pub fn generate_keypair_for_scheme(
     Ok(keys::generate_keypair_for_scheme(scheme)?)
 }
 
-/// Validate that a path is safe to use (no path traversal, symlinks to outside, etc.)
+/// Reject paths that can't be a usable input file: paths containing NUL
+/// bytes, and (on Unix) devices, FIFOs and sockets, following symlinks.
+///
+/// This is an early check, before `open` (opening a FIFO blocks);
+/// [`open_regular_file`] re-checks the opened handle. It does not restrict
+/// *where* a path points: input paths come from the user.
 fn validate_path(path: &Path) -> Result<(), EjsonError> {
     // Check for obviously dangerous patterns
     let path_str = path.to_string_lossy();
