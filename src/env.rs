@@ -585,6 +585,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(unsafe_code)]
     fn test_detect_shell() {
         // SAFETY: env vars are process-global; this test owns FISH_VERSION
         // for its duration and restores it afterwards. It doesn't run

@@ -2,6 +2,8 @@
 //!
 //! Supports JSON (.ejson, .json), TOML (.etoml, .toml), and YAML (.eyaml, .eyml, .yaml, .yml) file formats.
 
+#![forbid(unsafe_code)]
+
 use std::fs;
 use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -272,8 +274,37 @@ fn encrypt_action(files: &[PathBuf]) -> Result<(), String> {
             .map_err(|e| format!("Encryption failed: {e}"))?;
 
         println!("Wrote {n} bytes to {}.", file_path.display());
+        warn_plaintext_yaml_scalars(file_path);
     }
     Ok(())
+}
+
+/// Warn about YAML values that stayed in plaintext only because YAML parsed
+/// them as numbers or booleans (e.g. an unquoted `pin: 123456`).
+fn warn_plaintext_yaml_scalars(file_path: &Path) {
+    if !matches!(
+        ejson::FileFormat::from_path(file_path),
+        Ok(ejson::FileFormat::Yaml)
+    ) {
+        return;
+    }
+    let Ok(data) = fs::read(file_path) else {
+        return;
+    };
+    let Ok(paths) = ejson::yaml::plaintext_scalar_paths(&data) else {
+        return;
+    };
+    if paths.is_empty() {
+        return;
+    }
+
+    eprintln!(
+        "warning: {}: these values are numbers or booleans in YAML, so they were \
+         left unencrypted: {}",
+        file_path.display(),
+        paths.join(", ")
+    );
+    eprintln!("         Quote them (e.g. pin: \"123456\") to have them encrypted.");
 }
 
 fn decrypt_action(
@@ -301,35 +332,10 @@ fn decrypt_action(
     );
 
     if let Some(out_path) = output {
-        // Write decrypted output with restrictive permissions
-        // Use atomic write pattern: write to temp file, then rename
-        // This prevents race conditions and ensures correct permissions
-
-        let parent = out_path.parent().unwrap_or(Path::new("."));
-
-        // Create a temporary file in the same directory for atomic rename
-        let temp_path = parent.join(format!(".ejson_decrypt_{}.tmp", std::process::id()));
-
-        // Write to temp file with restrictive permissions
-        {
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&temp_path)
-                .map_err(|e| format!("Failed to create temporary file: {e}"))?;
-            file.write_all(&decrypted)
-                .map_err(|e| format!("Failed to write temporary file: {e}"))?;
-            file.sync_all()
-                .map_err(|e| format!("Failed to sync temporary file: {e}"))?;
-        }
-
-        // Atomic rename to final destination
-        fs::rename(&temp_path, out_path).map_err(|e| {
-            // Clean up temp file on error
-            let _ = fs::remove_file(&temp_path);
-            format!("Failed to rename temporary file to output: {e}")
-        })?;
+        // Owner-only, written atomically, and no partial copy left behind on
+        // failure.
+        ejson::write_private_file_atomically(out_path, &decrypted)
+            .map_err(|e| format!("Failed to write output file: {e}"))?;
     } else {
         io::stdout()
             .write_all(&decrypted)

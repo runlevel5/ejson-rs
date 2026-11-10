@@ -175,6 +175,49 @@ where
     }
 }
 
+/// List the values that `encrypt` leaves in plaintext only because YAML
+/// parses them as numbers or booleans.
+///
+/// ejson only encrypts strings, but in YAML an unquoted `pin: 123456` or
+/// `enabled: true` is a number or a bool, so a value that looks like any other
+/// secret silently stays readable. (`yes`/`no` are strings in YAML 1.2, so
+/// they are encrypted and not reported.) Returns the dotted path of each such value
+/// (e.g. `db.port`, `pins[0]`) in a position that would otherwise be
+/// encrypted, i.e. not under an `_`-prefixed key.
+pub fn plaintext_scalar_paths(data: &[u8]) -> Result<Vec<String>, YamlError> {
+    let s = String::from_utf8_lossy(data);
+    let doc: Value = serde_norway::from_str(&s).map_err(invalid_yaml)?;
+    let mut paths = Vec::new();
+    collect_plaintext_scalars(&doc, String::new(), false, &mut paths);
+    Ok(paths)
+}
+
+/// Mirrors [`Walker::walk_value`]'s rules for which values are encryptable.
+fn collect_plaintext_scalars(value: &Value, path: String, is_comment: bool, out: &mut Vec<String>) {
+    match value {
+        Value::Number(_) | Value::Bool(_) if !is_comment => out.push(path),
+        Value::Mapping(map) => {
+            for (key, val) in map {
+                let name = key.as_str().map_or_else(|| "?".to_string(), str::to_string);
+                let child = if path.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{path}.{name}")
+                };
+                let key_is_comment = name.starts_with('_');
+                collect_plaintext_scalars(val, child, key_is_comment, out);
+            }
+        }
+        Value::Sequence(seq) => {
+            for (i, item) in seq.iter().enumerate() {
+                collect_plaintext_scalars(item, format!("{path}[{i}]"), is_comment, out);
+            }
+        }
+        Value::Tagged(tagged) => collect_plaintext_scalars(&tagged.value, path, is_comment, out),
+        _ => {}
+    }
+}
+
 /// Trim the first leading underscore from all keys in a YAML document.
 /// The `_public_key` field is excluded from trimming.
 pub fn trim_underscore_prefix_from_keys(data: &[u8]) -> Result<Vec<u8>, YamlError> {
@@ -493,5 +536,30 @@ normal: "data"
             r#"unterminated "..."#
         );
         assert_eq!(redact_quoted("no quotes"), "no quotes");
+    }
+
+    #[test]
+    fn test_plaintext_scalar_paths() {
+        let yaml = br#"_public_key: abc
+password: hunter2
+pin: 123456
+enabled: true
+legacy_yes: yes
+ratio: 1.5
+quoted_pin: "123456"
+empty:
+_comment_pin: 42
+db:
+  port: 5432
+  _note: 1
+pins:
+  - 1111
+  - "2222"
+tagged: !x 7
+"#;
+        assert_eq!(
+            plaintext_scalar_paths(yaml).unwrap(),
+            vec!["pin", "enabled", "ratio", "db.port", "pins[0]", "tagged"]
+        );
     }
 }
