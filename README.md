@@ -271,11 +271,14 @@ ejson-rs automatically applies restrictive file permissions to protect sensitive
 | File Type | Permissions | Description |
 |-----------|-------------|-------------|
 | Private key files (`ejson keygen -w`) | `0o440` | Owner and group read-only |
+| Keydir, when created by `ejson keygen -w` | `0o750` | No access for other users |
 | Decrypted output files (`ejson decrypt -o`) | `0o600` | Owner read/write only |
 
 This ensures that:
 - Private keys cannot be accidentally modified
 - Decrypted secrets are not world-readable
+
+When a private key is read from the keydir, ejson prints a warning if the key file is accessible by other users or writable by its group, for example after being copied with a default `0644` mode.
 
 > **Note:** On non-Unix platforms (e.g., Windows), these permission settings are not applied. Take care to manually secure sensitive files on these systems.
 

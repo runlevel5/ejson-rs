@@ -602,19 +602,66 @@ fn read_private_key_from_disk(
         ));
     }
 
-    fs::read_to_string(&key_path).map_err(|_| {
-        // Don't include the full path in error messages to avoid information disclosure
-        let prefix: String = key_id.chars().take(8).collect();
+    // Don't include the full path in messages to avoid information disclosure
+    let prefix: String = key_id.chars().take(8).collect();
+
+    let contents = fs::read_to_string(&key_path).map_err(|_| {
         EjsonError::KeyFileError(format!(
             "key file for public key {prefix}... not found or unreadable"
         ))
-    })
+    })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = fs::metadata(&key_path)
+            && let Some(problem) = key_file_mode_problem(metadata.permissions().mode())
+        {
+            eprintln!(
+                "ejson: warning: key file for public key {prefix}... is {problem}; \
+                 restrict it with `chmod 440` (or `chmod 400`)"
+            );
+        }
+    }
+
+    Ok(contents)
+}
+
+/// Describe what is wrong with a private key file's permission bits, if anything.
+///
+/// Group *read* access is allowed, since `ejson keygen -w` creates keys `0440`
+/// so a service group can read them. Access for other users, or write access
+/// for anyone but the owner, is reported.
+#[cfg(unix)]
+fn key_file_mode_problem(mode: u32) -> Option<&'static str> {
+    if mode & 0o007 != 0 {
+        Some("accessible by other users")
+    } else if mode & 0o020 != 0 {
+        Some("writable by its group")
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    #[cfg(unix)]
+    fn test_key_file_mode_problem() {
+        // What keygen creates, and stricter, is fine
+        assert_eq!(key_file_mode_problem(0o100440), None);
+        assert_eq!(key_file_mode_problem(0o100400), None);
+        assert_eq!(key_file_mode_problem(0o100600), None);
+        assert_eq!(key_file_mode_problem(0o100640), None);
+        // Anything for "other", or group write, is flagged
+        assert!(key_file_mode_problem(0o100644).is_some());
+        assert!(key_file_mode_problem(0o100604).is_some());
+        assert!(key_file_mode_problem(0o100401).is_some());
+        assert!(key_file_mode_problem(0o100460).is_some());
+    }
 
     #[test]
     fn test_generate_keypair() {

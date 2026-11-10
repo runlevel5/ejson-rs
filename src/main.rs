@@ -190,8 +190,13 @@ fn keygen_action(keydir: &str, write_flag: bool, scheme: &str) -> Result<(), Str
         // The keydir filename is the key ID (the hex public key for v1, a short id for v2).
         let key_file = keydir_path.join(&key_id);
 
-        // Ensure keydir exists
-        fs::create_dir_all(keydir_path).map_err(|e| format!("Failed to create keydir: {e}"))?;
+        // Ensure keydir exists. Directories we create are not world-accessible;
+        // the group keeps access to match the 0o440 key files.
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o750)
+            .create(keydir_path)
+            .map_err(|e| format!("Failed to create keydir: {e}"))?;
 
         // Write private key with restrictive permissions
         // Use create_new(true) to ensure atomic creation with correct permissions
@@ -354,9 +359,9 @@ fn env_action(
     Ok(())
 }
 
-// Unix-specific extension for file permissions
+// Unix-specific extensions for file and directory permissions
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 
 #[cfg(not(unix))]
 trait OpenOptionsExt {
@@ -365,6 +370,18 @@ trait OpenOptionsExt {
 
 #[cfg(not(unix))]
 impl OpenOptionsExt for fs::OpenOptions {
+    fn mode(&mut self, _mode: u32) -> &mut Self {
+        self
+    }
+}
+
+#[cfg(not(unix))]
+trait DirBuilderExt {
+    fn mode(&mut self, _mode: u32) -> &mut Self;
+}
+
+#[cfg(not(unix))]
+impl DirBuilderExt for fs::DirBuilder {
     fn mode(&mut self, _mode: u32) -> &mut Self {
         self
     }
@@ -466,6 +483,22 @@ mod tests {
             "Key file should have 0o440 permissions, got 0o{:o}",
             mode
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_keygen_creates_keydir_without_world_access() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let keydir = temp_dir.path().join("a").join("keys");
+
+        keygen_action(keydir.to_str().unwrap(), true, "v1").unwrap();
+
+        for dir in [keydir.parent().unwrap(), keydir.as_path()] {
+            let mode = fs::metadata(dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode & 0o007, 0, "{} is 0o{mode:o}", dir.display());
+        }
     }
 
     #[test]
