@@ -45,7 +45,8 @@ will also set this value, with lower precedence.
 .BR \-w ", " \-\-write
 Write the private key to a file in the keydir, named after the key ID. Only the
 public key will be printed to stdout. The key file is created with restrictive
-permissions (0440 on Unix systems) to prevent unauthorized access.
+permissions (0440 on Unix systems) to prevent unauthorized access. If the
+keydir does not exist it is created with permissions 0750.
 .TP
 .BI \-\-scheme= mode
 Key scheme to generate:
@@ -178,6 +179,11 @@ to prevent memory disclosure attacks.
 .IP \(bu 2
 The keydir should be protected with appropriate filesystem permissions.
 Only systems that need to decrypt secrets should have access to private keys.
+.B ejson decrypt
+and
+.B ejson env
+print a warning when a key file is accessible by other users or writable
+by its group.
 .IP \(bu 2
 Each secrets file should use a unique keypair. Do not reuse keypairs across
 unrelated projects.
