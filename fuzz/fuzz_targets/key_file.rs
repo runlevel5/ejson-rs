@@ -4,16 +4,14 @@
 
 use std::sync::OnceLock;
 
-use ejson::keys::{PrivateKey, PublicKey, generate_keypair_for_scheme};
+use ejson::keys::{PrivateKey, PublicKey, Scheme, generate_keypair};
 use libfuzzer_sys::fuzz_target;
 
 fn public_keys() -> &'static [PublicKey; 2] {
     static KEYS: OnceLock<[PublicKey; 2]> = OnceLock::new();
     KEYS.get_or_init(|| {
-        ["v1", "v2"].map(|scheme| {
-            let (public, _, _) = generate_keypair_for_scheme(scheme).unwrap();
-            PublicKey::parse(&public).unwrap()
-        })
+        [Scheme::V1, Scheme::V2]
+            .map(|scheme| PublicKey::parse(&generate_keypair(scheme).public_key).unwrap())
     })
 }
 

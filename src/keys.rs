@@ -9,6 +9,7 @@
 //! flows, so the rest of the crate stays scheme-agnostic.
 
 use std::fmt;
+use std::str::FromStr;
 
 use zeroize::Zeroizing;
 
@@ -18,24 +19,65 @@ use crate::hybrid::{
     HybridPublicKey,
 };
 
-/// Canonical scheme identifiers.
-pub const SCHEME_LEGACY: &str = "v1";
-pub const SCHEME_HYBRID: &str = "v2";
+/// An encryption scheme.
+///
+/// Parses from its canonical name (`"v1"`, `"v2"`) and a few aliases, and
+/// displays as the canonical name:
+///
+/// ```
+/// use ejson::Scheme;
+///
+/// assert_eq!("pqc".parse::<Scheme>()?, Scheme::V2);
+/// assert_eq!(Scheme::V2.to_string(), "v2");
+/// assert!("v9".parse::<Scheme>().is_err());
+/// # Ok::<(), ejson::crypto::CryptoError>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum Scheme {
+    /// Legacy NaCl box (Curve25519 + XSalsa20 + Poly1305); see [`crate::crypto`].
+    #[default]
+    V1,
+    /// Hybrid post-quantum (X25519 + ML-KEM-768); see [`crate::hybrid`].
+    V2,
+}
 
-/// Schema version numbers as they appear in the `EJ[<n>:...]` wire format.
-pub const VERSION_LEGACY: u8 = 1;
-pub const VERSION_HYBRID: u8 = 2;
-
-/// Normalize a user-supplied scheme string to a canonical `v1`/`v2`, accepting a range of
-/// aliases. Unknown values are returned lowercased so the caller can produce a helpful
-/// error.
-pub fn normalize_scheme(scheme: &str) -> String {
-    match scheme.trim().to_lowercase().as_str() {
-        "" | "1" | "v1" | "legacy" | "classic" | "nacl" | "box" => SCHEME_LEGACY.to_string(),
-        "2" | "v2" | "hybrid" | "pqc" | "post-quantum" | "postquantum" | "mlkem" | "ml-kem" => {
-            SCHEME_HYBRID.to_string()
+impl Scheme {
+    /// The canonical name: `"v1"` or `"v2"`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Scheme::V1 => "v1",
+            Scheme::V2 => "v2",
         }
-        other => other.to_string(),
+    }
+
+    /// The schema version number as it appears in the `EJ[<n>:...]` wire format.
+    pub const fn version(self) -> u8 {
+        match self {
+            Scheme::V1 => 1,
+            Scheme::V2 => 2,
+        }
+    }
+}
+
+impl fmt::Display for Scheme {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for Scheme {
+    type Err = CryptoError;
+
+    /// Accepts the canonical names and aliases, ignoring case and surrounding
+    /// whitespace. Anything else is [`CryptoError::UnsupportedScheme`].
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "1" | "v1" | "legacy" | "classic" | "nacl" | "box" => Ok(Scheme::V1),
+            "2" | "v2" | "hybrid" | "pqc" | "post-quantum" | "postquantum" | "mlkem" | "ml-kem" => {
+                Ok(Scheme::V2)
+            }
+            other => Err(CryptoError::UnsupportedScheme(other.to_string())),
+        }
     }
 }
 
@@ -50,23 +92,19 @@ pub enum PublicKey {
 
 impl fmt::Debug for PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let scheme = match self {
-            PublicKey::Legacy(_) => SCHEME_LEGACY,
-            PublicKey::Hybrid(_) => SCHEME_HYBRID,
-        };
         f.debug_struct("PublicKey")
-            .field("scheme", &scheme)
+            .field("scheme", &self.scheme())
             .field("key_id", &self.key_id())
             .finish()
     }
 }
 
 impl PublicKey {
-    /// The schema version number.
-    pub fn version(&self) -> u8 {
+    /// The scheme this key belongs to.
+    pub fn scheme(&self) -> Scheme {
         match self {
-            PublicKey::Legacy(_) => VERSION_LEGACY,
-            PublicKey::Hybrid(_) => VERSION_HYBRID,
+            PublicKey::Legacy(_) => Scheme::V1,
+            PublicKey::Hybrid(_) => Scheme::V2,
         }
     }
 
@@ -142,11 +180,11 @@ impl PrivateKey {
         }))
     }
 
-    /// The scheme this key belongs to: `"v1"` or `"v2"`.
-    pub fn scheme(&self) -> &'static str {
+    /// The scheme this key belongs to.
+    pub fn scheme(&self) -> Scheme {
         match self.0 {
-            PrivateKeyInner::Legacy(_) => SCHEME_LEGACY,
-            PrivateKeyInner::Hybrid(_) => SCHEME_HYBRID,
+            PrivateKeyInner::Legacy(_) => Scheme::V1,
+            PrivateKeyInner::Hybrid(_) => Scheme::V2,
         }
     }
 }
@@ -216,31 +254,56 @@ impl AnyDecrypter {
     }
 }
 
-/// Generate a keypair for the named scheme.
+/// A freshly generated keypair, in the forms ejson stores them.
 ///
-/// Returns `(public_key_document_string, private_key_file_string, key_id)`. The private
-/// key should be written to `keydir/<key_id>`.
-pub fn generate_keypair_for_scheme(
-    scheme: &str,
-) -> Result<(String, Zeroizing<String>, String), CryptoError> {
-    match normalize_scheme(scheme).as_str() {
-        SCHEME_LEGACY => {
+/// `Debug` output redacts the private key, which is wiped from memory on drop.
+pub struct GeneratedKeypair {
+    /// The scheme the keypair was generated for.
+    pub scheme: Scheme,
+    /// Goes in a document's `_public_key` field: 64 hex characters for `v1`,
+    /// `v2:<base64>` for `v2`.
+    pub public_key: String,
+    /// The contents of the private key file. For `v2` this is a multi-line
+    /// `ejson-key v2` file.
+    pub private_key: Zeroizing<String>,
+    /// The name of the private key file in the keydir: the hex public key for
+    /// `v1`, a 32-character derived ID for `v2`.
+    pub key_id: String,
+}
+
+impl fmt::Debug for GeneratedKeypair {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GeneratedKeypair")
+            .field("scheme", &self.scheme)
+            .field("public_key", &self.public_key)
+            .field("private_key", &"[REDACTED]")
+            .field("key_id", &self.key_id)
+            .finish()
+    }
+}
+
+/// Generate a new keypair for `scheme`.
+pub fn generate_keypair(scheme: Scheme) -> GeneratedKeypair {
+    match scheme {
+        Scheme::V1 => {
             let kp = Keypair::generate();
-            let public = kp.public_string();
-            let private = kp.private_hex();
-            let key_id = public.clone();
-            Ok((public, private, key_id))
+            let public_key = kp.public_string();
+            GeneratedKeypair {
+                scheme,
+                key_id: public_key.clone(),
+                private_key: kp.private_hex(),
+                public_key,
+            }
         }
-        SCHEME_HYBRID => {
+        Scheme::V2 => {
             let (public, private) = hybrid::generate_hybrid_keypair();
-            let key_id = public.key_id();
-            Ok((
-                public.to_document_string(),
-                private.to_file_string(),
-                key_id,
-            ))
+            GeneratedKeypair {
+                scheme,
+                public_key: public.to_document_string(),
+                private_key: private.to_file_string(),
+                key_id: public.key_id(),
+            }
         }
-        other => Err(CryptoError::UnsupportedScheme(other.to_string())),
     }
 }
 
@@ -261,44 +324,93 @@ fn parse_legacy_private_key(data: &str) -> Result<Zeroizing<KeyBytes>, CryptoErr
 mod tests {
     use super::*;
 
+    /// `(public_key, private_key, key_id)` of a new keypair.
+    fn generate(scheme: Scheme) -> (String, Zeroizing<String>, String) {
+        let kp = generate_keypair(scheme);
+        assert_eq!(kp.scheme, scheme);
+        (kp.public_key, kp.private_key, kp.key_id)
+    }
+
+    const SCHEMES: [Scheme; 2] = [Scheme::V1, Scheme::V2];
+
     #[test]
-    fn test_normalize_scheme() {
-        for s in ["", "v1", "1", "legacy", "nacl", "BOX"] {
-            assert_eq!(normalize_scheme(s), SCHEME_LEGACY);
+    fn test_scheme_parsing_and_display() {
+        for s in ["v1", "1", "legacy", "classic", "nacl", "BOX", " V1 "] {
+            assert_eq!(s.parse::<Scheme>().unwrap(), Scheme::V1, "{s:?}");
         }
-        for s in ["v2", "2", "pqc", "hybrid", "ML-KEM", "post-quantum"] {
-            assert_eq!(normalize_scheme(s), SCHEME_HYBRID);
+        for s in [
+            "v2",
+            "2",
+            "pqc",
+            "hybrid",
+            "ML-KEM",
+            "mlkem",
+            "post-quantum",
+            "postquantum",
+        ] {
+            assert_eq!(s.parse::<Scheme>().unwrap(), Scheme::V2, "{s:?}");
         }
-        assert_eq!(normalize_scheme("bogus"), "bogus");
+        for s in ["", "bogus", "v9", "3"] {
+            assert!(
+                matches!(s.parse::<Scheme>(), Err(CryptoError::UnsupportedScheme(_))),
+                "{s:?}"
+            );
+        }
+
+        for scheme in SCHEMES {
+            // The canonical name round-trips.
+            assert_eq!(scheme.to_string().parse::<Scheme>().unwrap(), scheme);
+            assert_eq!(scheme.as_str(), scheme.to_string());
+        }
+        assert_eq!((Scheme::V1.version(), Scheme::V2.version()), (1, 2));
+        assert_eq!(Scheme::default(), Scheme::V1);
+    }
+
+    #[test]
+    fn test_generated_keypair_debug_redacts_the_private_key() {
+        for scheme in SCHEMES {
+            let kp = generate_keypair(scheme);
+            let debug = format!("{kp:?}");
+            assert!(debug.contains("[REDACTED]"));
+            assert!(debug.contains(&kp.key_id));
+            for line in kp
+                .private_key
+                .lines()
+                .filter(|l| l.contains("priv") || l.len() == 64)
+            {
+                let secret = line.rsplit(' ').next().unwrap();
+                assert!(!debug.contains(secret), "{scheme}: leaked");
+            }
+        }
     }
 
     #[test]
     fn test_legacy_parse_and_ids() {
-        let (public, private, key_id) = generate_keypair_for_scheme("v1").unwrap();
+        let (public, private, key_id) = generate(Scheme::V1);
         assert_eq!(public.len(), 64);
         assert_eq!(key_id, public);
         let pk = PublicKey::parse(&public).unwrap();
-        assert_eq!(pk.version(), VERSION_LEGACY);
+        assert_eq!(pk.scheme(), Scheme::V1);
         assert_eq!(pk.key_id(), public);
         PrivateKey::parse_for_public(&pk, &private).unwrap();
     }
 
     #[test]
     fn test_hybrid_parse_and_ids() {
-        let (public, private, key_id) = generate_keypair_for_scheme("v2").unwrap();
+        let (public, private, key_id) = generate(Scheme::V2);
         assert!(public.starts_with("v2:"));
         assert!(private.starts_with("ejson-key v2\n"));
         assert_eq!(key_id.len(), 32);
         let pk = PublicKey::parse(&public).unwrap();
-        assert_eq!(pk.version(), VERSION_HYBRID);
+        assert_eq!(pk.scheme(), Scheme::V2);
         assert_eq!(pk.key_id(), key_id);
         PrivateKey::parse_for_public(&pk, &private).unwrap();
     }
 
     #[test]
     fn test_debug_output_never_contains_private_keys() {
-        for scheme in ["v1", "v2"] {
-            let (public, private, key_id) = generate_keypair_for_scheme(scheme).unwrap();
+        for scheme in SCHEMES {
+            let (public, private, key_id) = generate(scheme);
             let pk = PublicKey::parse(&public).unwrap();
             let privk = PrivateKey::parse_for_public(&pk, &private).unwrap();
 
@@ -341,8 +453,8 @@ mod tests {
             );
         }
 
-        for scheme in ["v1", "v2"] {
-            let (public, private, _) = generate_keypair_for_scheme(scheme).unwrap();
+        for scheme in SCHEMES {
+            let (public, private, _) = generate(scheme);
             let pk = PublicKey::parse(&public).unwrap();
 
             // Malformed private keys
@@ -357,9 +469,12 @@ mod tests {
             }
 
             // A valid private key of the other scheme is malformed for this one.
-            let other_scheme = if scheme == "v1" { "v2" } else { "v1" };
-            let (other_public, other_private, _) =
-                generate_keypair_for_scheme(other_scheme).unwrap();
+            let other_scheme = if scheme == Scheme::V1 {
+                Scheme::V2
+            } else {
+                Scheme::V1
+            };
+            let (other_public, other_private, _) = generate(other_scheme);
             assert!(matches!(
                 PrivateKey::parse_for_public(&pk, &other_private),
                 Err(CryptoError::InvalidPrivateKey)
@@ -376,8 +491,8 @@ mod tests {
 
         // A well-formed v2 key for a different v2 public key is a mismatch,
         // detected when the key is loaded.
-        let (public, _, _) = generate_keypair_for_scheme("v2").unwrap();
-        let (_, other_private, _) = generate_keypair_for_scheme("v2").unwrap();
+        let (public, _, _) = generate(Scheme::V2);
+        let (_, other_private, _) = generate(Scheme::V2);
         let pk = PublicKey::parse(&public).unwrap();
         assert!(matches!(
             PrivateKey::parse_for_public(&pk, &other_private),
@@ -386,17 +501,9 @@ mod tests {
     }
 
     #[test]
-    fn test_unsupported_scheme() {
-        assert!(matches!(
-            generate_keypair_for_scheme("v9"),
-            Err(CryptoError::UnsupportedScheme(_))
-        ));
-    }
-
-    #[test]
     fn test_roundtrip_both_schemes() {
-        for scheme in ["v1", "v2"] {
-            let (public, private, _id) = generate_keypair_for_scheme(scheme).unwrap();
+        for scheme in SCHEMES {
+            let (public, private, _id) = generate(scheme);
             let pk = PublicKey::parse(&public).unwrap();
             let enc = AnyEncrypter::for_public_key(&pk).unwrap();
             let ct = enc.encrypt(b"hello world").unwrap();

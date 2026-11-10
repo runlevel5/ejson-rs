@@ -16,6 +16,7 @@ use ejson::env::{
     ExportFunction, export_env, export_env_auto, export_env_fish, export_quiet, export_quiet_auto,
     export_quiet_fish, read_and_export_env,
 };
+use ejson::{GeneratedKeypair, Scheme};
 use zeroize::Zeroizing;
 
 /// Which shell syntax to emit environment variable assignments in.
@@ -66,7 +67,7 @@ enum Commands {
 
         /// Key scheme to generate: v1 (legacy NaCl box) or v2 (hybrid post-quantum)
         #[arg(long = "scheme", default_value = "v1")]
-        scheme: String,
+        scheme: Scheme,
 
         /// Generate a v2 hybrid X25519 + ML-KEM-768 keypair (alias for --scheme v2)
         #[arg(long = "pqc")]
@@ -172,8 +173,8 @@ fn main() {
             scheme,
             pqc,
         } => {
-            let scheme = if pqc { "v2".to_string() } else { scheme };
-            keygen_action(&keydir.keydir, write, &scheme)
+            let scheme = if pqc { Scheme::V2 } else { scheme };
+            keygen_action(&keydir.keydir, write, scheme)
         }
         Commands::Encrypt { files } => encrypt_action(&files),
         Commands::Decrypt {
@@ -239,9 +240,13 @@ fn disable_core_dumps() {
     }
 }
 
-fn keygen_action(keydir: &str, write_flag: bool, scheme: &str) -> Result<(), String> {
-    let (pub_key, priv_key, key_id) = ejson::generate_keypair_for_scheme(scheme)
-        .map_err(|e| format!("Key generation failed: {e}"))?;
+fn keygen_action(keydir: &str, write_flag: bool, scheme: Scheme) -> Result<(), String> {
+    let GeneratedKeypair {
+        public_key: pub_key,
+        private_key: priv_key,
+        key_id,
+        ..
+    } = ejson::generate_keypair(scheme);
 
     if write_flag {
         let keydir_path = Path::new(keydir);
@@ -468,7 +473,11 @@ mod tests {
     /// Helper to set up a test environment with keypair and encrypted file
     fn setup_test_env() -> (TempDir, TempDir, PathBuf, String) {
         // Generate a keypair
-        let (pub_key, priv_key, _) = ejson::generate_keypair_for_scheme("v1").unwrap();
+        let GeneratedKeypair {
+            public_key: pub_key,
+            private_key: priv_key,
+            ..
+        } = ejson::generate_keypair(Scheme::V1);
 
         // Create a temporary keydir and write the private key
         let keydir = TempDir::new().unwrap();
@@ -537,7 +546,7 @@ mod tests {
         let keydir = temp_dir.path().to_str().unwrap();
 
         // Run keygen with write flag
-        keygen_action(keydir, true, "v1").unwrap();
+        keygen_action(keydir, true, Scheme::V1).unwrap();
 
         // Find the key file (should be the only file in keydir)
         let entries: Vec<_> = fs::read_dir(keydir).unwrap().collect();
@@ -564,7 +573,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let keydir = temp_dir.path().join("a").join("keys");
 
-        keygen_action(keydir.to_str().unwrap(), true, "v1").unwrap();
+        keygen_action(keydir.to_str().unwrap(), true, Scheme::V1).unwrap();
 
         for dir in [keydir.parent().unwrap(), keydir.as_path()] {
             let mode = fs::metadata(dir).unwrap().permissions().mode() & 0o777;
@@ -580,7 +589,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let keydir = temp_dir.path().to_str().unwrap();
 
-        keygen_action(keydir, true, "v2").unwrap();
+        keygen_action(keydir, true, Scheme::V2).unwrap();
 
         let entries: Vec<_> = fs::read_dir(keydir).unwrap().collect();
         assert_eq!(entries.len(), 1, "Expected exactly one key file");

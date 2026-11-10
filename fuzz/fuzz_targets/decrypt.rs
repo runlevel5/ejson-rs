@@ -6,7 +6,7 @@
 use std::sync::OnceLock;
 
 use ejson::format::FileFormat;
-use ejson::{decrypt_bytes_typed, generate_keypair_for_scheme};
+use ejson::{Scheme, decrypt_bytes_typed, generate_keypair};
 use libfuzzer_sys::fuzz_target;
 
 struct Key {
@@ -17,11 +17,11 @@ struct Key {
 fn keys() -> &'static [Key; 2] {
     static KEYS: OnceLock<[Key; 2]> = OnceLock::new();
     KEYS.get_or_init(|| {
-        ["v1", "v2"].map(|scheme| {
-            let (public, private, _) = generate_keypair_for_scheme(scheme).unwrap();
+        [Scheme::V1, Scheme::V2].map(|scheme| {
+            let kp = generate_keypair(scheme);
             Key {
-                public,
-                private: private.to_string(),
+                public: kp.public_key,
+                private: kp.private_key.to_string(),
             }
         })
     })

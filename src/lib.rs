@@ -53,8 +53,9 @@ use std::path::Path;
 
 use crypto::CryptoError;
 
-// Re-export key type for public API
+// Re-export key types for public API
 pub use crypto::KeyBytes;
+pub use keys::{GeneratedKeypair, Scheme, generate_keypair};
 // Re-export typed API
 pub use format::FileFormat;
 // Re-export handler trait for implementing custom formats
@@ -113,20 +114,6 @@ pub enum EjsonError {
 
     #[error("invalid path: {0}")]
     InvalidPath(String),
-}
-
-/// Generate a new ejson keypair for the named scheme (`v1` or `v2`, plus aliases).
-///
-/// Returns `(public_key, private_key, key_id)`:
-/// - `public_key` goes in the document's `_public_key` field (hex for `v1`, `v2:...` for `v2`).
-/// - `private_key` is written to the keydir; for `v2` it is a multi-line `ejson-key v2` file.
-/// - `key_id` is the keydir filename (the hex public key for `v1`, a 32-char id for `v2`).
-///
-/// The private key is returned in a `Zeroizing` wrapper and should be handled securely.
-pub fn generate_keypair_for_scheme(
-    scheme: &str,
-) -> Result<(String, Zeroizing<String>, String), EjsonError> {
-    Ok(keys::generate_keypair_for_scheme(scheme)?)
 }
 
 /// Reject paths that can't be a usable input file: paths containing NUL
@@ -1708,7 +1695,12 @@ environment:
     #[test]
     fn test_hybrid_encrypt_decrypt_file() {
         // Generate a v2 hybrid keypair and store the private key under its key id.
-        let (pub_key, priv_key, key_id) = generate_keypair_for_scheme("v2").unwrap();
+        let GeneratedKeypair {
+            public_key: pub_key,
+            private_key: priv_key,
+            key_id,
+            ..
+        } = generate_keypair(Scheme::V2);
         assert!(pub_key.starts_with("v2:"));
 
         let temp_dir = TempDir::new().unwrap();
