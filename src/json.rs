@@ -7,7 +7,10 @@
 //! The walker uses a scanner-based approach instead of parsing and re-serializing
 //! to preserve key ordering and make diffs meaningful over time.
 
+use std::fmt;
+
 use crate::handler::{FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, WalkAction};
+use serde::de::{Deserialize, Deserializer, IgnoredAny, MapAccess, Visitor};
 use serde_json::Value;
 use thiserror::Error;
 
@@ -30,8 +33,15 @@ pub enum JsonError {
 /// Extract the raw `_public_key` string value from an EJSON document.
 ///
 /// The value is returned uninterpreted; scheme detection happens in [`crate::keys`].
+///
+/// A document that defines `_public_key` more than once at the top level is
+/// rejected with [`JsonError::PublicKeyInvalid`].
 pub fn extract_public_key_string(data: &[u8]) -> Result<String, JsonError> {
     let obj: Value = serde_json::from_slice(data).map_err(|_| JsonError::InvalidJson)?;
+
+    if has_duplicate_public_key(data) {
+        return Err(JsonError::PublicKeyInvalid);
+    }
 
     let key_value = obj
         .get(PUBLIC_KEY_FIELD)
@@ -41,6 +51,45 @@ pub fn extract_public_key_string(data: &[u8]) -> Result<String, JsonError> {
         .as_str()
         .map(str::to_string)
         .ok_or(JsonError::PublicKeyInvalid)
+}
+
+/// Returns true if the top-level object defines `_public_key` more than once.
+///
+/// `serde_json` keeps the last of a set of duplicate keys. For `_public_key`
+/// that means a reviewer can see one key at the top of a file while a second
+/// one further down is the key secrets actually get encrypted to.
+pub fn has_duplicate_public_key(data: &[u8]) -> bool {
+    struct CountPublicKeys;
+
+    impl<'de> Visitor<'de> for CountPublicKeys {
+        type Value = usize;
+
+        fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("a JSON object")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<usize, A::Error> {
+            let mut count = 0;
+            while let Some(key) = map.next_key::<String>()? {
+                if key == PUBLIC_KEY_FIELD {
+                    count += 1;
+                }
+                map.next_value::<IgnoredAny>()?;
+            }
+            Ok(count)
+        }
+    }
+
+    struct PublicKeyCount(usize);
+
+    impl<'de> Deserialize<'de> for PublicKeyCount {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            d.deserialize_map(CountPublicKeys).map(PublicKeyCount)
+        }
+    }
+
+    // Not an object (or not JSON): there is nothing to duplicate.
+    serde_json::from_slice::<PublicKeyCount>(data).is_ok_and(|c| c.0 > 1)
 }
 
 /// Extract the _public_key value from an EJSON document as a legacy 32-byte key.
@@ -880,6 +929,12 @@ impl FormatHandler for JsonHandler {
     }
 
     fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError> {
+        if has_duplicate_public_key(data) {
+            return Err(FormatError::InvalidSyntax {
+                format: "JSON",
+                message: format!("`{PUBLIC_KEY_FIELD}` is defined more than once"),
+            });
+        }
         extract_public_key_string(data).map_err(Into::into)
     }
 
@@ -917,6 +972,36 @@ mod tests {
             extract_public_key(json),
             Err(JsonError::PublicKeyMissing)
         ));
+    }
+
+    #[test]
+    fn test_duplicate_public_key_is_rejected() {
+        let json = br#"{"_public_key": "aaaa", "a": "s", "_public_key": "bbbb"}"#;
+        assert!(has_duplicate_public_key(json));
+        assert!(matches!(
+            extract_public_key_string(json),
+            Err(JsonError::PublicKeyInvalid)
+        ));
+        assert!(matches!(
+            JsonHandler.extract_public_key_string(json),
+            Err(FormatError::InvalidSyntax { .. })
+        ));
+
+        // An escaped spelling of the same key is still the same key
+        let escaped = br#"{"_public_key": "aaaa", "_public\u005fkey": "bbbb"}"#;
+        assert!(has_duplicate_public_key(escaped));
+    }
+
+    #[test]
+    fn test_single_or_nested_public_key_is_not_a_duplicate() {
+        assert!(!has_duplicate_public_key(br#"{"_public_key": "aaaa"}"#));
+        assert!(!has_duplicate_public_key(
+            br#"{"_public_key": "aaaa", "nested": {"_public_key": "bbbb"}}"#
+        ));
+        assert!(!has_duplicate_public_key(
+            br#"["_public_key", "_public_key"]"#
+        ));
+        assert!(!has_duplicate_public_key(b"not json"));
     }
 
     #[test]
