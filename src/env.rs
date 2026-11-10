@@ -164,9 +164,6 @@ pub enum EnvError {
     Write(#[source] std::io::Error),
 }
 
-/// Type alias for export functions.
-pub type ExportFunction = fn(&mut dyn Write, &SecretEnvMap) -> Result<(), EnvError>;
-
 /// Returns true if the error is due to the environment being missing or invalid.
 pub fn is_env_error(err: &EnvError) -> bool {
     matches!(err, EnvError::NoEnv | EnvError::EnvNotMap)
@@ -223,7 +220,8 @@ pub fn read_and_export_env<P: AsRef<Path>, W: Write>(
     file_path: P,
     key: KeySource<'_>,
     trim_underscore_prefix: bool,
-    export_func: ExportFunction,
+    shell: Shell,
+    style: ExportStyle,
     output: &mut W,
 ) -> Result<(), EnvError> {
     let env_values = match read_and_extract_env(&file_path, key, trim_underscore_prefix) {
@@ -232,7 +230,7 @@ pub fn read_and_export_env<P: AsRef<Path>, W: Write>(
         Err(e) => return Err(e),
     };
 
-    export_func(output, &env_values)
+    export(output, &env_values, shell, style)
 }
 
 /// Filters control characters from a value, preserving newlines.
@@ -261,19 +259,32 @@ pub enum Shell {
     Fish,
 }
 
-/// Detects the current shell from the environment.
-///
-/// Returns [`Shell::Fish`] when `$FISH_VERSION` is in the environment, and
-/// [`Shell::Posix`] otherwise. Note that fish itself does *not* export
-/// `$FISH_VERSION` (as of fish 4), so under fish this usually returns
-/// `Posix`. That is safe: values are quoted so they read the same in both
-/// shells, and fish understands `export KEY=value`.
-pub fn detect_shell() -> Shell {
-    if std::env::var_os("FISH_VERSION").is_some() {
-        Shell::Fish
-    } else {
-        Shell::Posix
+impl Shell {
+    /// Detects the current shell from the environment.
+    ///
+    /// Returns [`Shell::Fish`] when `$FISH_VERSION` is in the environment, and
+    /// [`Shell::Posix`] otherwise. Note that fish itself does *not* export
+    /// `$FISH_VERSION` (as of fish 4), so under fish this usually returns
+    /// `Posix`. That is safe: values are quoted so they read the same in both
+    /// shells, and fish understands `export KEY=value`.
+    pub fn detect() -> Self {
+        if std::env::var_os("FISH_VERSION").is_some() {
+            Shell::Fish
+        } else {
+            Shell::Posix
+        }
     }
+}
+
+/// Whether the variables are exported to child processes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExportStyle {
+    /// `export KEY='value'` (POSIX) or `set -gx KEY 'value'` (fish).
+    #[default]
+    Exported,
+    /// `KEY='value'` (POSIX, also valid in a `.env` file) or
+    /// `set -g KEY 'value'` (fish).
+    Unexported,
 }
 
 /// Quotes a value so it reads back identically in POSIX shells *and* fish.
@@ -310,14 +321,37 @@ fn shell_quote(s: &str) -> String {
     result
 }
 
-/// Internal export function that writes environment variables for the given shell.
-fn export(
-    w: &mut dyn Write,
-    shell: Shell,
-    exported: bool,
+/// Writes `values` as shell assignments, one per line, sorted by name.
+///
+/// ```
+/// use ejson::env::{ExportStyle, SecretEnvMap, Shell, export};
+///
+/// let mut values = SecretEnvMap::new();
+/// values.insert("API_KEY".to_string(), "it's secret".to_string());
+///
+/// let mut out = Vec::new();
+/// export(&mut out, &values, Shell::Posix, ExportStyle::Exported)?;
+/// assert_eq!(out, b"export API_KEY='it'\"'\"'s secret'\n");
+///
+/// let mut out = Vec::new();
+/// export(&mut out, &values, Shell::Fish, ExportStyle::Unexported)?;
+/// assert_eq!(out, b"set -g API_KEY 'it'\"'\"'s secret'\n");
+/// # Ok::<(), ejson::env::EnvError>(())
+/// ```
+///
+/// Values are quoted so that POSIX shells and fish read them identically, and
+/// control characters other than newlines are dropped (reported through
+/// [`log`]). Returns [`EnvError::InvalidIdentifier`] if a name is not a valid
+/// shell identifier, before writing that line.
+pub fn export<W: Write>(
+    mut w: W,
     values: &SecretEnvMap,
+    shell: Shell,
+    style: ExportStyle,
 ) -> Result<(), EnvError> {
-    // SecretEnvMap uses BTreeMap internally, so iteration is sorted by key
+    let exported = style == ExportStyle::Exported;
+
+    // SecretEnvMap iterates sorted by name
     for (k, v) in values {
         // Validate key is a valid shell identifier
         if !is_valid_identifier(k) {
@@ -345,85 +379,23 @@ fn export(
     Ok(())
 }
 
-/// Exports environment variables using POSIX shell syntax with "export ".
-///
-/// Output format: `export KEY='value'`
-///
-/// Returns an error if any key is not a valid shell identifier.
-pub fn export_env(w: &mut dyn Write, values: &SecretEnvMap) -> Result<(), EnvError> {
-    export(w, Shell::Posix, true, values)
-}
-
-/// Exports environment variables using POSIX shell syntax without "export ".
-///
-/// Output format: `KEY='value'`
-///
-/// Returns an error if any key is not a valid shell identifier.
-pub fn export_quiet(w: &mut dyn Write, values: &SecretEnvMap) -> Result<(), EnvError> {
-    export(w, Shell::Posix, false, values)
-}
-
-/// Exports environment variables using fish shell syntax, exported globally.
-///
-/// Output format: `set -gx KEY 'value'`
-///
-/// Returns an error if any key is not a valid shell identifier.
-pub fn export_env_fish(w: &mut dyn Write, values: &SecretEnvMap) -> Result<(), EnvError> {
-    export(w, Shell::Fish, true, values)
-}
-
-/// Exports environment variables using fish shell syntax, without exporting.
-///
-/// Output format: `set -g KEY 'value'`
-///
-/// Returns an error if any key is not a valid shell identifier.
-pub fn export_quiet_fish(w: &mut dyn Write, values: &SecretEnvMap) -> Result<(), EnvError> {
-    export(w, Shell::Fish, false, values)
-}
-
-/// Exports environment variables for an explicitly chosen shell, exported.
-///
-/// Returns an error if any key is not a valid shell identifier.
-pub fn export_env_for_shell(
-    w: &mut dyn Write,
-    values: &SecretEnvMap,
-    shell: Shell,
-) -> Result<(), EnvError> {
-    export(w, shell, true, values)
-}
-
-/// Exports environment variables for an explicitly chosen shell, without exporting.
-///
-/// Returns an error if any key is not a valid shell identifier.
-pub fn export_quiet_for_shell(
-    w: &mut dyn Write,
-    values: &SecretEnvMap,
-    shell: Shell,
-) -> Result<(), EnvError> {
-    export(w, shell, false, values)
-}
-
-/// Exports environment variables, auto-detecting the shell via [`detect_shell`].
-///
-/// Output format: `export KEY='value'` (POSIX) or `set -gx KEY 'value'` (fish).
-///
-/// Returns an error if any key is not a valid shell identifier.
-pub fn export_env_auto(w: &mut dyn Write, values: &SecretEnvMap) -> Result<(), EnvError> {
-    export_env_for_shell(w, values, detect_shell())
-}
-
-/// Exports environment variables without exporting, auto-detecting the shell via [`detect_shell`].
-///
-/// Output format: `KEY='value'` (POSIX) or `set -g KEY 'value'` (fish).
-///
-/// Returns an error if any key is not a valid shell identifier.
-pub fn export_quiet_auto(w: &mut dyn Write, values: &SecretEnvMap) -> Result<(), EnvError> {
-    export_quiet_for_shell(w, values, detect_shell())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Short names for the combinations the tests below use.
+    fn export_env(w: &mut dyn Write, values: &SecretEnvMap) -> Result<(), EnvError> {
+        export(w, values, Shell::Posix, ExportStyle::Exported)
+    }
+    fn export_quiet(w: &mut dyn Write, values: &SecretEnvMap) -> Result<(), EnvError> {
+        export(w, values, Shell::Posix, ExportStyle::Unexported)
+    }
+    fn export_env_fish(w: &mut dyn Write, values: &SecretEnvMap) -> Result<(), EnvError> {
+        export(w, values, Shell::Fish, ExportStyle::Exported)
+    }
+    fn export_quiet_fish(w: &mut dyn Write, values: &SecretEnvMap) -> Result<(), EnvError> {
+        export(w, values, Shell::Fish, ExportStyle::Unexported)
+    }
     use crate::DecryptedContent;
 
     #[test]
@@ -588,16 +560,8 @@ mod tests {
     }
 
     #[test]
-    fn test_export_for_shell_matches_convenience_functions() {
-        let mut output = Vec::new();
-        let mut values = SecretEnvMap::new();
-        values.insert("key".to_string(), "value".to_string());
-        export_env_for_shell(&mut output, &values, Shell::Fish).unwrap();
-
-        let mut expected = Vec::new();
-        export_env_fish(&mut expected, &values).unwrap();
-
-        assert_eq!(output, expected);
+    fn test_export_style_default_is_exported() {
+        assert_eq!(ExportStyle::default(), ExportStyle::Exported);
     }
 
     #[test]
@@ -609,10 +573,10 @@ mod tests {
         let previous = std::env::var_os("FISH_VERSION");
 
         unsafe { std::env::remove_var("FISH_VERSION") };
-        assert_eq!(detect_shell(), Shell::Posix);
+        assert_eq!(Shell::detect(), Shell::Posix);
 
         unsafe { std::env::set_var("FISH_VERSION", "3.7.0") };
-        assert_eq!(detect_shell(), Shell::Fish);
+        assert_eq!(Shell::detect(), Shell::Fish);
 
         match previous {
             Some(v) => unsafe { std::env::set_var("FISH_VERSION", v) },
@@ -689,7 +653,8 @@ mod tests {
             "does-not-exist.ejson",
             KeySource::keydir("/nonexistent"),
             false,
-            export_env,
+            Shell::Posix,
+            ExportStyle::Exported,
             &mut output,
         )
         .unwrap_err();
