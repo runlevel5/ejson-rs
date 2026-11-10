@@ -463,6 +463,29 @@ fn decrypt_to_a_file_writes_nothing_to_stdout() {
 }
 
 #[test]
+fn decrypt_to_an_unwritable_output_fails_cleanly() {
+    let fx = Fixture::new("v1");
+    let path = fx.write_encrypted("secrets.ejson", JSON_DOC);
+
+    // A non-empty directory can't be replaced by the output file.
+    let blocked = fx.dir.path().join("blocked");
+    fs::create_dir(&blocked).unwrap();
+    fs::write(blocked.join("keep"), "x").unwrap();
+
+    let output = run(fx.decrypt(&path).arg("-o").arg(&blocked));
+    assert_fails_with(&output, "Decryption failed: couldn't write output file: ");
+    assert!(output.stdout.is_empty());
+
+    // No plaintext is left behind in a temporary file.
+    let leftovers: Vec<_> = fs::read_dir(fx.dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .filter(|name| name.ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[test]
 fn decrypt_with_key_from_stdin() {
     for scheme in ["v1", "v2"] {
         let fx = Fixture::new(scheme);
