@@ -336,6 +336,10 @@ man ejson-decrypt
 man ejson-env
 ```
 
+## Upgrading from 1.x
+
+Files and keys are unchanged in 2.0, but the Rust library API and a few details of the command-line tool differ. See [UPGRADING.md](UPGRADING.md).
+
 ## See Also
 
 - [Original ejson documentation](https://shopify.github.io/ejson)
