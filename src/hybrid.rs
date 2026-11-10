@@ -15,6 +15,10 @@
 //! This is the `v2` scheme — the first scheme after the legacy `v1` NaCl box. See the
 //! project README for details.
 
+// This module owns the deprecated-for-external-use secret fields below; its
+// own accesses are intended.
+#![allow(deprecated)]
+
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use chacha20poly1305::{
     XChaCha20Poly1305, XNonce,
@@ -154,7 +158,17 @@ impl HybridPublicKey {
 /// the corresponding public key.
 pub struct HybridPrivateKey {
     pub public: HybridPublicKey,
+    #[deprecated(
+        since = "1.1.0",
+        note = "reading this field copies key material out of the zeroizing \
+                `HybridPrivateKey`; it will become private in 2.0. Use `to_file_string()`"
+    )]
     pub x25519_private: [u8; HYBRID_X25519_KEY_SIZE],
+    #[deprecated(
+        since = "1.1.0",
+        note = "reading this field copies key material out of the zeroizing \
+                `HybridPrivateKey`; it will become private in 2.0. Use `to_file_string()`"
+    )]
     pub mlkem_seed: [u8; HYBRID_MLKEM_SEED_SIZE],
 }
 

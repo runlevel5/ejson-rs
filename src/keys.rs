@@ -191,7 +191,7 @@ pub fn generate_keypair_for_scheme(
         SCHEME_LEGACY => {
             let kp = Keypair::generate()?;
             let public = kp.public_string();
-            let private = Zeroizing::new(kp.private_string());
+            let private = kp.private_hex();
             let key_id = public.clone();
             Ok((public, private, key_id))
         }
