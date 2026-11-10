@@ -69,6 +69,46 @@ use toml::TomlError;
 use yaml::YamlError;
 use zeroize::Zeroizing;
 
+/// Where the private key for a document comes from.
+///
+/// ```no_run
+/// use ejson::KeySource;
+///
+/// // Look the key up in a keydir, in the file named after the document's public key:
+/// let plaintext = ejson::decrypt_file("secrets.ejson", KeySource::keydir("/opt/ejson/keys"), false)?;
+///
+/// // Or supply the private key directly (e.g. fetched from a secrets manager):
+/// let private_key = std::env::var("EJSON_PRIVATE_KEY").unwrap();
+/// let plaintext = ejson::decrypt_file("secrets.ejson", KeySource::PrivateKey(&private_key), false)?;
+/// # Ok::<(), ejson::EjsonError>(())
+/// ```
+#[derive(Clone, Copy)]
+pub enum KeySource<'a> {
+    /// Read the key from this directory, from the file named after the
+    /// document's public key (its key ID).
+    Keydir(&'a Path),
+    /// Use this private key: 64 hex characters for `v1`, or the contents of an
+    /// `ejson-key v2` file for `v2`.
+    PrivateKey(&'a str),
+}
+
+impl<'a> KeySource<'a> {
+    /// A [`KeySource::Keydir`] from anything path-like.
+    pub fn keydir<P: AsRef<Path> + ?Sized>(keydir: &'a P) -> Self {
+        Self::Keydir(keydir.as_ref())
+    }
+}
+
+// Never prints a private key.
+impl std::fmt::Debug for KeySource<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Keydir(keydir) => f.debug_tuple("Keydir").field(keydir).finish(),
+            Self::PrivateKey(_) => f.debug_tuple("PrivateKey").field(&"[REDACTED]").finish(),
+        }
+    }
+}
+
 /// Maximum file size for encryption/decryption operations (10 MB).
 /// This prevents denial of service through memory exhaustion.
 pub const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
@@ -454,52 +494,37 @@ fn create_temp_file(dir: &Path, name: &str) -> Result<(std::path::PathBuf, File)
 
 /// Decrypt data from a reader and write to a writer.
 ///
-/// The private key is looked up in `keydir` (a file named after the public key),
-/// or can be supplied directly via `user_supplied_private_key`.
+/// `key` says where the private key comes from: a keydir or the key itself
+/// (see [`KeySource`]).
 ///
 /// This function assumes JSON format. For format detection based on file extension,
 /// use `decrypt_file`.
 pub fn decrypt<R: Read, W: Write>(
     mut input: R,
     mut output: W,
-    keydir: &str,
-    user_supplied_private_key: &str,
+    key: KeySource<'_>,
 ) -> Result<(), EjsonError> {
     let data = read_to_end_limited(&mut input, MAX_FILE_SIZE, 0)?;
 
-    decrypt_data(
-        &data,
-        &mut output,
-        keydir,
-        user_supplied_private_key,
-        FileFormat::Json,
-    )
+    decrypt_data(&data, &mut output, key, FileFormat::Json)
 }
 
 /// Decrypt data with a specific format.
 pub fn decrypt_with_format<R: Read, W: Write>(
     mut input: R,
     mut output: W,
-    keydir: &str,
-    user_supplied_private_key: &str,
+    key: KeySource<'_>,
     format: FileFormat,
 ) -> Result<(), EjsonError> {
     let data = read_to_end_limited(&mut input, MAX_FILE_SIZE, 0)?;
 
-    decrypt_data(
-        &data,
-        &mut output,
-        keydir,
-        user_supplied_private_key,
-        format,
-    )
+    decrypt_data(&data, &mut output, key, format)
 }
 
 fn decrypt_data<W: Write>(
     data: &[u8],
     output: &mut W,
-    keydir: &str,
-    user_supplied_private_key: &str,
+    key: KeySource<'_>,
     format: FileFormat,
 ) -> Result<(), EjsonError> {
     // Get the appropriate handler for this format
@@ -510,7 +535,7 @@ fn decrypt_data<W: Write>(
     let pubkey = keys::PublicKey::parse(&pubkey_string)?;
 
     // Find the matching private key and create a scheme-aware decrypter.
-    let privkey = find_private_key(&pubkey, keydir, user_supplied_private_key)?;
+    let privkey = find_private_key(&pubkey, key)?;
     let decrypter = keys::AnyDecrypter::new(&pubkey, privkey)?;
 
     // Create decryption closure that conditionally decrypts
@@ -542,21 +567,14 @@ fn decrypt_data<W: Write>(
 /// Security: Uses file locking and size limits.
 pub fn decrypt_file<P: AsRef<Path>>(
     file_path: P,
-    keydir: &str,
-    user_supplied_private_key: &str,
+    key: KeySource<'_>,
     trim_underscore_prefix: bool,
 ) -> Result<Vec<u8>, EjsonError> {
     let file_path = file_path.as_ref();
     let format = FileFormat::from_path(file_path)?;
     let data = read_file_with_lock(file_path)?;
     let mut output = Zeroizing::new(Vec::new());
-    decrypt_data(
-        &data,
-        &mut *output,
-        keydir,
-        user_supplied_private_key,
-        format,
-    )?;
+    decrypt_data(&data, &mut *output, key, format)?;
 
     if trim_underscore_prefix {
         // The untrimmed copy is wiped when `output` is replaced.
@@ -578,10 +596,11 @@ pub fn decrypt_file<P: AsRef<Path>>(
 /// # Example
 ///
 /// ```no_run
-/// use ejson::{decrypt_bytes_typed, DecryptedContent, format::FileFormat};
+/// use ejson::{decrypt_bytes_typed, DecryptedContent, KeySource, format::FileFormat};
 ///
 /// let encrypted_data = b"{\"_public_key\": \"...\", \"secret\": \"EJ[...]\"}";
-/// let content = decrypt_bytes_typed(encrypted_data, "/opt/ejson/keys", "", FileFormat::Json, false)?;
+/// let key = KeySource::keydir("/opt/ejson/keys");
+/// let content = decrypt_bytes_typed(encrypted_data, key, FileFormat::Json, false)?;
 ///
 /// // Access values uniformly regardless of JSON/YAML/TOML format
 /// if let Some(env) = content.get("environment") {
@@ -597,8 +616,7 @@ pub fn decrypt_file<P: AsRef<Path>>(
 /// ```
 pub fn decrypt_bytes_typed(
     data: &[u8],
-    keydir: &str,
-    user_supplied_private_key: &str,
+    key: KeySource<'_>,
     format: FileFormat,
     trim_underscore_prefix: bool,
 ) -> Result<DecryptedContent, EjsonError> {
@@ -610,13 +628,7 @@ pub fn decrypt_bytes_typed(
     // Decrypt to bytes first. Both intermediate buffers hold plaintext and
     // are wiped once the typed value has been parsed from them.
     let mut output = Zeroizing::new(Vec::new());
-    decrypt_data(
-        data,
-        &mut *output,
-        keydir,
-        user_supplied_private_key,
-        format,
-    )?;
+    decrypt_data(data, &mut *output, key, format)?;
 
     let decrypted_bytes = if trim_underscore_prefix {
         Zeroizing::new(trim_underscore_prefix_from_keys(&output, format)?)
@@ -639,9 +651,10 @@ pub fn decrypt_bytes_typed(
 /// # Example
 ///
 /// ```no_run
-/// use ejson::{decrypt_file_typed, DecryptedContent};
+/// use ejson::{decrypt_file_typed, DecryptedContent, KeySource};
 ///
-/// let content = decrypt_file_typed("secrets.ejson", "/opt/ejson/keys", "", false)?;
+/// let key = KeySource::keydir("/opt/ejson/keys");
+/// let content = decrypt_file_typed("secrets.ejson", key, false)?;
 ///
 /// // Access values uniformly regardless of JSON/YAML/TOML format
 /// if let Some(env) = content.get("environment") {
@@ -657,20 +670,14 @@ pub fn decrypt_bytes_typed(
 /// ```
 pub fn decrypt_file_typed<P: AsRef<Path>>(
     file_path: P,
-    keydir: &str,
-    user_supplied_private_key: &str,
+    key: KeySource<'_>,
     trim_underscore_prefix: bool,
 ) -> Result<DecryptedContent, EjsonError> {
     let file_path = file_path.as_ref();
     let format = FileFormat::from_path(file_path)?;
 
     // Decrypt to bytes first; wiped once the typed value has been parsed.
-    let decrypted_bytes = Zeroizing::new(decrypt_file(
-        file_path,
-        keydir,
-        user_supplied_private_key,
-        trim_underscore_prefix,
-    )?);
+    let decrypted_bytes = Zeroizing::new(decrypt_file(file_path, key, trim_underscore_prefix)?);
 
     parse_decrypted(&decrypted_bytes, format)
 }
@@ -706,22 +713,21 @@ fn trim_underscore_prefix_from_keys(
 
 fn find_private_key(
     pubkey: &keys::PublicKey,
-    keydir: &str,
-    user_supplied_private_key: &str,
+    key: KeySource<'_>,
 ) -> Result<keys::PrivateKey, EjsonError> {
     // A key read from disk is owned here and wiped on return; a key supplied
     // by the caller is borrowed, not copied.
     let from_disk: Zeroizing<String>;
-    let privkey_string: &str = if user_supplied_private_key.is_empty() {
-        from_disk = read_private_key_from_disk(pubkey, keydir)?;
-        &from_disk
-    } else {
-        user_supplied_private_key
+    let privkey_string: &str = match key {
+        KeySource::Keydir(keydir) => {
+            from_disk = read_private_key_from_disk(pubkey, keydir)?;
+            &from_disk
+        }
+        KeySource::PrivateKey(private_key) => private_key,
     };
 
-    // Parse scheme-aware private key material for the given public key. Malformed key
-    // material is surfaced as the stable `InvalidPrivateKey` error (preserving the prior
-    // public contract); a well-formed key that doesn't match the public key surfaces as
+    // Malformed key material is surfaced as the stable `InvalidPrivateKey`
+    // error; a well-formed key that doesn't match the public key surfaces as
     // the underlying crypto error.
     keys::PrivateKey::parse_for_public(pubkey, privkey_string).map_err(|e| match e {
         CryptoError::InvalidPrivateKey => EjsonError::InvalidPrivateKey,
@@ -734,18 +740,17 @@ fn find_private_key(
 /// The key, and the raw bytes it is decoded from, are wiped when dropped.
 fn read_private_key_from_disk(
     pubkey: &keys::PublicKey,
-    keydir: &str,
+    keydir: &Path,
 ) -> Result<Zeroizing<String>, EjsonError> {
     // The keydir filename is the key ID: for legacy keys this is the 64-char hex public
     // key (unchanged); for hybrid keys it is a 32-char derived ID.
     let key_id = pubkey.key_id();
-    let keydir_path = Path::new(keydir);
-    let key_path = keydir_path.join(&key_id);
+    let key_path = keydir.join(&key_id);
 
     // Verify the path is still within keydir after resolution
     // This prevents path traversal via a malicious key ID
     if let (Ok(canonical_keydir), Ok(canonical_key_path)) =
-        (fs::canonicalize(keydir_path), fs::canonicalize(&key_path))
+        (fs::canonicalize(keydir), fs::canonicalize(&key_path))
         && !canonical_key_path.starts_with(&canonical_keydir)
     {
         return Err(EjsonError::InvalidPath(
@@ -877,7 +882,7 @@ mod tests {
             let path = keydir.path().join(key.key_id());
             fs::write(&path, "00").unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
-            read_private_key_from_disk(key, keydir.path().to_str().unwrap()).unwrap();
+            read_private_key_from_disk(key, keydir.path()).unwrap();
         }
 
         let warnings = test_log::messages_containing("cdcdcdcd");
@@ -936,7 +941,7 @@ mod tests {
 
         // Decrypt
         let mut decrypted = Vec::new();
-        decrypt(&encrypted[..], &mut decrypted, keydir, "").unwrap();
+        decrypt(&encrypted[..], &mut decrypted, KeySource::keydir(keydir)).unwrap();
         let decrypted_str = String::from_utf8_lossy(&decrypted);
 
         // Verify decryption
@@ -985,7 +990,13 @@ _hint = "password hint"
 
         // Decrypt
         let mut decrypted = Vec::new();
-        decrypt_with_format(&encrypted[..], &mut decrypted, keydir, "", FileFormat::Toml).unwrap();
+        decrypt_with_format(
+            &encrypted[..],
+            &mut decrypted,
+            KeySource::keydir(keydir),
+            FileFormat::Toml,
+        )
+        .unwrap();
         let decrypted_str = String::from_utf8_lossy(&decrypted);
 
         // Verify decryption
@@ -1062,7 +1073,13 @@ database:
 
         // Decrypt
         let mut decrypted = Vec::new();
-        decrypt_with_format(&encrypted[..], &mut decrypted, keydir, "", FileFormat::Yaml).unwrap();
+        decrypt_with_format(
+            &encrypted[..],
+            &mut decrypted,
+            KeySource::keydir(keydir),
+            FileFormat::Yaml,
+        )
+        .unwrap();
         let decrypted_str = String::from_utf8_lossy(&decrypted);
 
         // Verify decryption
@@ -1225,7 +1242,7 @@ secret: "my secret"
             }
         });
 
-        let out = decrypt_file(&path, temp_dir.path().to_str().unwrap(), "", false).unwrap();
+        let out = decrypt_file(&path, KeySource::Keydir(temp_dir.path()), false).unwrap();
         let out = String::from_utf8(out).unwrap();
         assert!(out.contains("my secret"));
         assert!(out.contains(&pub_hex));
@@ -1236,7 +1253,7 @@ secret: "my secret"
         let keydir = TempDir::new().unwrap();
         let pubkey = keys::PublicKey::Legacy([0xab; 32]);
 
-        let err = read_private_key_from_disk(&pubkey, keydir.path().to_str().unwrap()).unwrap_err();
+        let err = read_private_key_from_disk(&pubkey, keydir.path()).unwrap_err();
         assert!(matches!(err, EjsonError::KeyFile(_)));
 
         let msg = err.to_string();
@@ -1264,7 +1281,7 @@ secret: "my secret"
             return;
         }
 
-        let msg = read_private_key_from_disk(&pubkey, keydir.path().to_str().unwrap())
+        let msg = read_private_key_from_disk(&pubkey, keydir.path())
             .unwrap_err()
             .to_string();
         assert_eq!(
@@ -1279,10 +1296,33 @@ secret: "my secret"
         let pubkey = keys::PublicKey::Legacy([0xab; 32]);
         fs::write(keydir.path().join(pubkey.key_id()), [0xff, 0xfe]).unwrap();
 
-        let msg = read_private_key_from_disk(&pubkey, keydir.path().to_str().unwrap())
+        let msg = read_private_key_from_disk(&pubkey, keydir.path())
             .unwrap_err()
             .to_string();
         assert!(msg.ends_with(": not valid UTF-8 text"), "{msg}");
+    }
+
+    #[test]
+    fn test_key_source_debug_redacts_the_private_key() {
+        let keydir = KeySource::keydir("/opt/ejson/keys");
+        assert_eq!(format!("{keydir:?}"), r#"Keydir("/opt/ejson/keys")"#);
+
+        let key = KeySource::PrivateKey("0123456789abcdef-secret");
+        assert_eq!(format!("{key:?}"), r#"PrivateKey("[REDACTED]")"#);
+    }
+
+    #[test]
+    fn test_empty_private_key_is_an_error_not_a_keydir_lookup() {
+        let temp_dir = TempDir::new().unwrap();
+        let (path, _) = write_ejson_fixture(temp_dir.path());
+        encrypt_file_in_place(&path).unwrap();
+
+        // The matching key is sitting in what used to be the fallback keydir.
+        assert!(decrypt_file(&path, KeySource::Keydir(temp_dir.path()), false).is_ok());
+        assert!(matches!(
+            decrypt_file(&path, KeySource::PrivateKey(""), false),
+            Err(EjsonError::InvalidPrivateKey)
+        ));
     }
 
     #[test]
@@ -1316,7 +1356,7 @@ secret: "my secret"
         std::os::unix::fs::symlink("/dev/zero", &link).unwrap();
 
         assert!(matches!(
-            decrypt_file(&link, "/nonexistent", "", false),
+            decrypt_file(&link, KeySource::keydir("/nonexistent"), false),
             Err(EjsonError::InvalidPath(_))
         ));
         assert!(matches!(
@@ -1334,7 +1374,7 @@ secret: "my secret"
         fs::create_dir(keydir.path().join(pubkey.key_id())).unwrap();
 
         assert!(matches!(
-            read_private_key_from_disk(&pubkey, keydir.path().to_str().unwrap()),
+            read_private_key_from_disk(&pubkey, keydir.path()),
             Err(EjsonError::InvalidPath(_))
         ));
     }
@@ -1347,7 +1387,7 @@ secret: "my secret"
         fs::write(keydir.path().join(pubkey.key_id()), big).unwrap();
 
         assert!(matches!(
-            read_private_key_from_disk(&pubkey, keydir.path().to_str().unwrap()),
+            read_private_key_from_disk(&pubkey, keydir.path()),
             Err(EjsonError::FileTooLarge)
         ));
     }
@@ -1362,7 +1402,7 @@ secret: "my secret"
     #[test]
     fn test_invalid_private_key_length() {
         let pubkey = keys::PublicKey::Legacy([0u8; 32]);
-        let result = find_private_key(&pubkey, "/nonexistent", "deadbeef"); // Too short
+        let result = find_private_key(&pubkey, KeySource::PrivateKey("deadbeef")); // Too short
         assert!(matches!(result, Err(EjsonError::InvalidPrivateKey)));
     }
 
@@ -1390,7 +1430,7 @@ secret: "my secret"
         encrypt_file_in_place(&json_path).unwrap();
 
         // Decrypt with typed API
-        let content = decrypt_file_typed(&json_path, keydir, "", false).unwrap();
+        let content = decrypt_file_typed(&json_path, KeySource::keydir(keydir), false).unwrap();
 
         // Access using unified API
         let env = content.get("environment").expect("should have environment");
@@ -1438,7 +1478,7 @@ BAZ = "qux"
         encrypt_file_in_place(&toml_path).unwrap();
 
         // Decrypt with typed API
-        let content = decrypt_file_typed(&toml_path, keydir, "", false).unwrap();
+        let content = decrypt_file_typed(&toml_path, KeySource::keydir(keydir), false).unwrap();
 
         // Access using unified API
         let env = content.get("environment").expect("should have environment");
@@ -1486,7 +1526,7 @@ environment:
         encrypt_file_in_place(&yaml_path).unwrap();
 
         // Decrypt with typed API
-        let content = decrypt_file_typed(&yaml_path, keydir, "", false).unwrap();
+        let content = decrypt_file_typed(&yaml_path, KeySource::keydir(keydir), false).unwrap();
 
         // Access using unified API
         let env = content.get("environment").expect("should have environment");
@@ -1525,7 +1565,7 @@ environment:
         encrypt_file_in_place(&json_path).unwrap();
 
         // Simulate ejson2env extraction
-        let content = decrypt_file_typed(&json_path, keydir, "", false).unwrap();
+        let content = decrypt_file_typed(&json_path, KeySource::keydir(keydir), false).unwrap();
 
         // The pattern that ejson2env would use
         let env_secrets: std::collections::HashMap<String, String> = content
@@ -1568,7 +1608,13 @@ environment:
         encrypt(json_content.as_bytes(), &mut encrypted).unwrap();
 
         // Decrypt bytes with typed API
-        let content = decrypt_bytes_typed(&encrypted, keydir, "", FileFormat::Json, false).unwrap();
+        let content = decrypt_bytes_typed(
+            &encrypted,
+            KeySource::keydir(keydir),
+            FileFormat::Json,
+            false,
+        )
+        .unwrap();
 
         // Access using unified API
         let env = content.get("environment").expect("should have environment");
@@ -1615,7 +1661,13 @@ BAZ = "qux"
         encrypt_with_format(toml_content.as_bytes(), &mut encrypted, FileFormat::Toml).unwrap();
 
         // Decrypt bytes with typed API
-        let content = decrypt_bytes_typed(&encrypted, keydir, "", FileFormat::Toml, false).unwrap();
+        let content = decrypt_bytes_typed(
+            &encrypted,
+            KeySource::keydir(keydir),
+            FileFormat::Toml,
+            false,
+        )
+        .unwrap();
 
         // Access using unified API
         let env = content.get("environment").expect("should have environment");
@@ -1652,7 +1704,13 @@ environment:
         encrypt_with_format(yaml_content.as_bytes(), &mut encrypted, FileFormat::Yaml).unwrap();
 
         // Decrypt bytes with typed API
-        let content = decrypt_bytes_typed(&encrypted, keydir, "", FileFormat::Yaml, false).unwrap();
+        let content = decrypt_bytes_typed(
+            &encrypted,
+            KeySource::keydir(keydir),
+            FileFormat::Yaml,
+            false,
+        )
+        .unwrap();
 
         // Access using unified API
         let env = content.get("environment").expect("should have environment");
@@ -1682,7 +1740,13 @@ environment:
         encrypt(json_content.as_bytes(), &mut encrypted).unwrap();
 
         // Decrypt bytes with typed API and trim underscore prefix
-        let content = decrypt_bytes_typed(&encrypted, keydir, "", FileFormat::Json, true).unwrap();
+        let content = decrypt_bytes_typed(
+            &encrypted,
+            KeySource::keydir(keydir),
+            FileFormat::Json,
+            true,
+        )
+        .unwrap();
 
         // Keys should have underscore prefix removed
         let env = content
@@ -1722,11 +1786,11 @@ environment:
         assert!(ciphertext.contains(r#""_comment": "plaintext""#));
 
         // Decrypt via the keydir.
-        let out = decrypt_file(&ejson_path, keydir, "", false).unwrap();
+        let out = decrypt_file(&ejson_path, KeySource::keydir(keydir), false).unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), original);
 
         // Decrypt via a user-supplied (multi-line) private key, ignoring the keydir.
-        let out = decrypt_file(&ejson_path, "/does/not/matter", &priv_key, false).unwrap();
+        let out = decrypt_file(&ejson_path, KeySource::PrivateKey(&priv_key), false).unwrap();
         assert_eq!(String::from_utf8(out).unwrap(), original);
     }
 }

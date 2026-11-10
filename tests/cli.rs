@@ -515,6 +515,12 @@ fn decrypt_errors() {
     assert_fails_with(&output, "private key does not match the public key");
     assert!(output.stdout.is_empty());
 
+    // `--key-from-stdin` with nothing on stdin is an error. It must not fall
+    // back to the keydir, which here holds the right key.
+    let output = run_with_stdin(fx.decrypt(&path).arg("--key-from-stdin"), "");
+    assert_fails_with(&output, "invalid private key");
+    assert!(output.stdout.is_empty());
+
     // Malformed key on stdin.
     let output = run_with_stdin(fx.decrypt(&path).arg("--key-from-stdin"), "not-a-key");
     assert_fails_with(&output, "invalid private key");
