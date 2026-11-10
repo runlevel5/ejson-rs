@@ -24,11 +24,16 @@
 //! }
 //! ```
 
+use std::fmt;
+
 /// A reference type for uniformly accessing values across JSON, YAML, and TOML formats.
 ///
 /// This enum wraps references to the underlying format-specific value types,
 /// providing a common interface for value access.
-#[derive(Debug, Clone)]
+///
+/// Security: `Debug` output shows only the format, never the value, so
+/// decrypted secrets don't end up in logs via `{:?}` or `dbg!`.
+#[derive(Clone)]
 pub enum DecryptedValue<'a> {
     /// A JSON value reference
     Json(&'a serde_json::Value),
@@ -36,6 +41,17 @@ pub enum DecryptedValue<'a> {
     Yaml(&'a serde_norway::Value),
     /// A TOML value reference
     Toml(&'a ::toml::Value),
+}
+
+impl fmt::Debug for DecryptedValue<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let variant = match self {
+            DecryptedValue::Json(_) => "Json",
+            DecryptedValue::Yaml(_) => "Yaml",
+            DecryptedValue::Toml(_) => "Toml",
+        };
+        write!(f, "DecryptedValue::{variant}([REDACTED])")
+    }
 }
 
 impl<'a> DecryptedValue<'a> {
@@ -158,7 +174,12 @@ impl<'a> DecryptedValue<'a> {
 ///
 /// This enum contains the actual parsed value (not just bytes) after decryption,
 /// allowing format-agnostic access to the decrypted data.
-#[derive(Debug, Clone)]
+///
+/// Security: `Debug` output shows only the format, never the contents, so
+/// decrypted secrets don't end up in logs via `{:?}` or `dbg!`. Use
+/// [`as_json`](Self::as_json), [`as_yaml`](Self::as_yaml) or
+/// [`as_toml`](Self::as_toml) to inspect the underlying value deliberately.
+#[derive(Clone)]
 pub enum DecryptedContent {
     /// Decrypted and parsed JSON content
     Json(serde_json::Value),
@@ -166,6 +187,17 @@ pub enum DecryptedContent {
     Yaml(serde_norway::Value),
     /// Decrypted and parsed TOML content
     Toml(::toml::Value),
+}
+
+impl fmt::Debug for DecryptedContent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let variant = match self {
+            DecryptedContent::Json(_) => "Json",
+            DecryptedContent::Yaml(_) => "Yaml",
+            DecryptedContent::Toml(_) => "Toml",
+        };
+        write!(f, "DecryptedContent::{variant}([REDACTED])")
+    }
 }
 
 impl DecryptedContent {
@@ -324,5 +356,42 @@ mod tests {
         assert_eq!(pairs.len(), 2);
         assert!(pairs.contains(&("FOO".to_string(), "bar".to_string())));
         assert!(pairs.contains(&("BAZ".to_string(), "qux".to_string())));
+    }
+
+    #[test]
+    fn test_debug_output_redacts_secrets() {
+        let contents = [
+            DecryptedContent::Json(serde_json::json!({"password": "hunter2-secret"})),
+            DecryptedContent::Yaml(serde_norway::from_str("password: hunter2-secret").unwrap()),
+            DecryptedContent::Toml(::toml::from_str("password = \"hunter2-secret\"").unwrap()),
+        ];
+
+        for content in &contents {
+            let value = content.get("password").unwrap();
+            assert_eq!(value.as_str(), Some("hunter2-secret"));
+
+            for debug in [
+                format!("{content:?}"),
+                format!("{content:#?}"),
+                format!("{value:?}"),
+                format!("{:?}", content.as_value()),
+                // Common ways a value ends up in a log line
+                format!("{:?}", Some(content)),
+                format!("{:?}", Ok::<_, ()>(content)),
+            ] {
+                assert!(!debug.contains("hunter2"), "leaked: {debug}");
+                assert!(!debug.contains("password"), "leaked a key: {debug}");
+                assert!(debug.contains("[REDACTED]"), "{debug}");
+            }
+        }
+
+        assert_eq!(
+            format!("{:?}", contents[0]),
+            "DecryptedContent::Json([REDACTED])"
+        );
+        assert_eq!(
+            format!("{:?}", contents[1].as_value()),
+            "DecryptedValue::Yaml([REDACTED])"
+        );
     }
 }
