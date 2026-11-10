@@ -181,6 +181,29 @@ impl BoxedMessage {
     }
 }
 
+/// How a string value relates to the boxed (`EJ[...]`) message format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueKind {
+    /// Not an encrypted message: ordinary plaintext.
+    Plaintext,
+    /// A well-formed encrypted message of a supported schema version.
+    Boxed,
+    /// Starts with `EJ[` but is not a well-formed message: a damaged
+    /// ciphertext, or one written by a newer ejson with an unknown schema.
+    Damaged,
+}
+
+/// Classify a string value. See [`ValueKind`].
+pub fn classify_value(data: &[u8]) -> ValueKind {
+    if is_boxed_message(data) {
+        ValueKind::Boxed
+    } else if data.starts_with(b"EJ[") {
+        ValueKind::Damaged
+    } else {
+        ValueKind::Plaintext
+    }
+}
+
 /// Check if data is in a supported boxed message format (v1 or v2).
 ///
 /// Used to decide whether a string value requires encryption or is already encrypted.
@@ -250,6 +273,47 @@ mod tests {
         assert!(!is_boxed_message(b"not encrypted"));
         assert!(!is_boxed_message(b"EJ[invalid"));
         assert!(!is_boxed_message(b""));
+    }
+
+    #[test]
+    fn test_classify_value() {
+        let valid = "EJ[1:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=:AgICAgICAgICAgICAgICAgICAgICAgIC:AwQFBgcICQo=]";
+        assert_eq!(classify_value(valid.as_bytes()), ValueKind::Boxed);
+
+        for plaintext in [
+            "",
+            "hunter2",
+            "ej[1:lowercase]",
+            " EJ[1:leading space]",
+            "xEJ[",
+        ] {
+            assert_eq!(
+                classify_value(plaintext.as_bytes()),
+                ValueKind::Plaintext,
+                "{plaintext:?}"
+            );
+        }
+
+        let damaged = [
+            // one character added to the public key field
+            valid.replacen("EJ[1:", "EJ[1:A", 1),
+            // truncated
+            valid[..valid.len() - 10].to_string(),
+            // a schema version this build doesn't know
+            valid.replacen("EJ[1:", "EJ[3:", 1),
+            // not base64
+            valid.replace("AwQFBgcICQo=", "****"),
+            "EJ[".to_string(),
+            "EJ[]".to_string(),
+            "EJ[hello".to_string(),
+        ];
+        for value in &damaged {
+            assert_eq!(
+                classify_value(value.as_bytes()),
+                ValueKind::Damaged,
+                "{value:?}"
+            );
+        }
     }
 
     #[test]
