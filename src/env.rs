@@ -136,6 +136,9 @@ pub enum EnvError {
 
     #[error("ejson error: {0}")]
     Ejson(#[from] EjsonError),
+
+    #[error("could not write environment: {0}")]
+    Write(#[source] std::io::Error),
 }
 
 /// Type alias for export functions.
@@ -241,11 +244,11 @@ pub enum Shell {
 
 /// Detects the current shell from the environment.
 ///
-/// Fish sets `$FISH_VERSION` in its own process, and this is inherited by any
-/// command it directly invokes - this is the standard, documented way for a
-/// child process to detect that it's running under fish. Everything else
-/// (bash, zsh, sh, dash, ...) is treated as POSIX-compatible, which is a safe
-/// default since they all understand `export KEY='value'`.
+/// Returns [`Shell::Fish`] when `$FISH_VERSION` is in the environment, and
+/// [`Shell::Posix`] otherwise. Note that fish itself does *not* export
+/// `$FISH_VERSION` (as of fish 4), so under fish this usually returns
+/// `Posix`. That is safe: values are quoted so they read the same in both
+/// shells, and fish understands `export KEY=value`.
 pub fn detect_shell() -> Shell {
     if std::env::var_os("FISH_VERSION").is_some() {
         Shell::Fish
@@ -254,44 +257,35 @@ pub fn detect_shell() -> Shell {
     }
 }
 
-/// Shell-escapes a value for safe use in POSIX shell commands.
-/// This mimics Go's shellescape.Quote behavior which always uses single quotes
-/// and escapes single quotes by ending the quoted string, adding an escaped
-/// single quote, then starting a new quoted string.
-fn posix_quote(s: &str) -> String {
-    // Go's shellescape.Quote behavior:
-    // - Always wraps in single quotes
-    // - Escapes single quotes as: 'text'"'"'more'
-    //   which means: end single quote, add escaped single quote, start new single quote
-    let mut result = String::with_capacity(s.len() + 2);
-    result.push('\'');
-    for c in s.chars() {
-        if c == '\'' {
-            // End the current single-quoted string, add an escaped single quote,
-            // then start a new single-quoted string
-            result.push_str("'\"'\"'");
-        } else {
-            result.push(c);
-        }
-    }
-    result.push('\'');
-    result
-}
-
-/// Shell-escapes a value for safe use in fish shell commands.
+/// Quotes a value so it reads back identically in POSIX shells *and* fish.
 ///
-/// Unlike POSIX, fish's single-quoted strings do support two escape
-/// sequences: `\'` for a literal single quote and `\\` for a literal
-/// backslash. Everything else (including `$`, backticks, and double quotes)
-/// is taken literally inside single quotes, so no other escaping is needed.
-fn fish_quote(s: &str) -> String {
+/// The value is wrapped in single quotes. The only two characters that single
+/// quotes treat differently between the shells, `'` and `\`, are written as
+/// double-quoted `"'"` and `"\\"` instead, which both shells read the same
+/// way:
+///
+/// ```text
+/// it's      ->  'it'"'"'s'
+/// back\    ->  'back'"\\"''
+/// ```
+///
+/// Using one form for both matters because the shell is often guessed wrong:
+/// fish does not export `$FISH_VERSION`, so `--shell auto` emits POSIX output
+/// under fish. With POSIX-only quoting, a value ending in a backslash
+/// (`'x\'`) left fish's string open and the *next* value was run as a
+/// command.
+///
+/// For values without a backslash this is byte-for-byte the same as Go's
+/// `shellescape.Quote`, used by the original `ejson2env`.
+fn shell_quote(s: &str) -> String {
     let mut result = String::with_capacity(s.len() + 2);
     result.push('\'');
     for c in s.chars() {
-        if c == '\'' || c == '\\' {
-            result.push('\\');
+        match c {
+            '\'' => result.push_str("'\"'\"'"),
+            '\\' => result.push_str("'\"\\\\\"'"),
+            c => result.push(c),
         }
-        result.push(c);
     }
     result.push('\'');
     result
@@ -316,18 +310,18 @@ fn export(
             eprintln!("ejson env trimmed control characters from value");
         }
 
+        let quoted = shell_quote(&filtered);
         match shell {
             Shell::Posix => {
-                let quoted = posix_quote(&filtered);
                 let prefix = if exported { "export " } else { "" };
-                let _ = writeln!(w, "{}{}={}", prefix, k, quoted);
+                writeln!(w, "{}{}={}", prefix, k, quoted)
             }
             Shell::Fish => {
-                let quoted = fish_quote(&filtered);
                 let flag = if exported { "-gx" } else { "-g" };
-                let _ = writeln!(w, "set {} {} {}", flag, k, quoted);
+                writeln!(w, "set {} {} {}", flag, k, quoted)
             }
         }
+        .map_err(EnvError::Write)?;
     }
     Ok(())
 }
@@ -546,7 +540,7 @@ mod tests {
         export_env_fish(&mut output, &values).unwrap();
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "set -gx key 'it\\'s a value'\n"
+            "set -gx key 'it'\"'\"'s a value'\n"
         );
     }
 
@@ -559,7 +553,7 @@ mod tests {
         export_env_fish(&mut output, &values).unwrap();
         assert_eq!(
             String::from_utf8(output).unwrap(),
-            "set -gx key 'back\\\\slash'\n"
+            "set -gx key 'back'\"\\\\\"'slash'\n"
         );
     }
 
@@ -823,6 +817,70 @@ mod tests {
         let result = export_env(&mut output, &values);
         // Key starting with dollar should return an error
         assert!(matches!(result, Err(EnvError::InvalidIdentifier(_))));
+    }
+
+    #[test]
+    fn test_posix_backslash_is_safe_for_fish_too() {
+        // A trailing backslash used to leave fish's string open, so the next
+        // value was run as a command when fish evaluated POSIX output.
+        let mut output = Vec::new();
+        let mut values = SecretEnvMap::new();
+        values.insert("A".to_string(), "x\\".to_string());
+        values.insert("B".to_string(), "; echo PWNED #".to_string());
+
+        export_env(&mut output, &values).unwrap();
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "export A='x'\"\\\\\"''\nexport B='; echo PWNED #'\n"
+        );
+    }
+
+    #[test]
+    fn test_posix_and_fish_quote_values_identically() {
+        for value in [
+            "plain",
+            "it's",
+            "back\\slash",
+            "x\\",
+            "\\'\\'",
+            "$HOME `id`",
+        ] {
+            let mut values = SecretEnvMap::new();
+            values.insert("K".to_string(), value.to_string());
+
+            let mut posix = Vec::new();
+            export_env(&mut posix, &values).unwrap();
+            let mut fish = Vec::new();
+            export_env_fish(&mut fish, &values).unwrap();
+
+            let posix = String::from_utf8(posix).unwrap();
+            let fish = String::from_utf8(fish).unwrap();
+            assert_eq!(
+                posix.strip_prefix("export K="),
+                fish.strip_prefix("set -gx K "),
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_write_errors_are_reported() {
+        struct FailingWriter;
+        impl Write for FailingWriter {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut values = SecretEnvMap::new();
+        values.insert("K".to_string(), "v".to_string());
+        assert!(matches!(
+            export_env(&mut FailingWriter, &values),
+            Err(EnvError::Write(_))
+        ));
     }
 
     #[test]
