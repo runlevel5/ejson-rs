@@ -283,60 +283,7 @@ where
 
     /// Read a JSON string and return its unescaped content as bytes.
     fn read_string_raw(&self, data: &[u8], i: &mut usize) -> Result<Vec<u8>, JsonError> {
-        if *i >= data.len() || data[*i] != b'"' {
-            return Err(JsonError::InvalidJson);
-        }
-        *i += 1; // Skip opening quote
-
-        let mut result = Vec::with_capacity(64);
-        let mut escaped = false;
-
-        while *i < data.len() {
-            let c = data[*i];
-            *i += 1;
-
-            if escaped {
-                match c {
-                    b'"' => result.push(b'"'),
-                    b'\\' => result.push(b'\\'),
-                    b'/' => result.push(b'/'),
-                    b'b' => result.push(0x08),
-                    b'f' => result.push(0x0C),
-                    b'n' => result.push(b'\n'),
-                    b'r' => result.push(b'\r'),
-                    b't' => result.push(b'\t'),
-                    b'u' => {
-                        // Unicode escape
-                        if *i + 4 > data.len() {
-                            return Err(JsonError::InvalidJson);
-                        }
-                        let hex = std::str::from_utf8(&data[*i..*i + 4])
-                            .map_err(|_| JsonError::InvalidJson)?;
-                        *i += 4;
-                        if let Ok(code) = u32::from_str_radix(hex, 16)
-                            && let Some(ch) = char::from_u32(code)
-                        {
-                            let mut buf = [0u8; 4];
-                            let encoded = ch.encode_utf8(&mut buf);
-                            result.extend_from_slice(encoded.as_bytes());
-                        }
-                    }
-                    _ => {
-                        result.push(b'\\');
-                        result.push(c);
-                    }
-                }
-                escaped = false;
-            } else if c == b'\\' {
-                escaped = true;
-            } else if c == b'"' {
-                return Ok(result);
-            } else {
-                result.push(c);
-            }
-        }
-
-        Err(JsonError::InvalidJson)
+        read_string_raw(data, i)
     }
 
     #[inline]
@@ -365,6 +312,94 @@ fn escape_json_bytes_to(s: &[u8], output: &mut Vec<u8>) {
             c => output.push(c),
         }
     }
+}
+
+/// Read a JSON string starting at the opening quote and return its unescaped
+/// content as UTF-8 bytes.
+///
+/// `\uXXXX` escapes are decoded per RFC 8259, including UTF-16 surrogate
+/// pairs for characters outside the Basic Multilingual Plane. Malformed
+/// escapes are an error rather than being dropped: silently changing a value
+/// here would corrupt the secret that gets encrypted.
+fn read_string_raw(data: &[u8], i: &mut usize) -> Result<Vec<u8>, JsonError> {
+    if *i >= data.len() || data[*i] != b'"' {
+        return Err(JsonError::InvalidJson);
+    }
+    *i += 1; // Skip opening quote
+
+    let mut result = Vec::with_capacity(64);
+    let mut escaped = false;
+
+    while *i < data.len() {
+        let c = data[*i];
+        *i += 1;
+
+        if escaped {
+            match c {
+                b'"' => result.push(b'"'),
+                b'\\' => result.push(b'\\'),
+                b'/' => result.push(b'/'),
+                b'b' => result.push(0x08),
+                b'f' => result.push(0x0C),
+                b'n' => result.push(b'\n'),
+                b'r' => result.push(b'\r'),
+                b't' => result.push(b'\t'),
+                b'u' => {
+                    let ch = read_unicode_escape(data, i)?;
+                    let mut buf = [0u8; 4];
+                    result.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
+                }
+                _ => {
+                    result.push(b'\\');
+                    result.push(c);
+                }
+            }
+            escaped = false;
+        } else if c == b'\\' {
+            escaped = true;
+        } else if c == b'"' {
+            return Ok(result);
+        } else {
+            result.push(c);
+        }
+    }
+
+    Err(JsonError::InvalidJson)
+}
+
+/// Decode the code point of a `\uXXXX` escape whose `\u` has already been
+/// consumed, consuming a trailing `\uXXXX` low surrogate when the first one is
+/// a high surrogate.
+fn read_unicode_escape(data: &[u8], i: &mut usize) -> Result<char, JsonError> {
+    let first = read_hex4(data, i)?;
+    let code = match first {
+        0xD800..=0xDBFF => {
+            if data.get(*i..*i + 2) != Some(b"\\u") {
+                return Err(JsonError::InvalidJson);
+            }
+            *i += 2;
+            let second = read_hex4(data, i)?;
+            if !(0xDC00..=0xDFFF).contains(&second) {
+                return Err(JsonError::InvalidJson);
+            }
+            0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00)
+        }
+        0xDC00..=0xDFFF => return Err(JsonError::InvalidJson),
+        _ => first,
+    };
+    char::from_u32(code).ok_or(JsonError::InvalidJson)
+}
+
+/// Read exactly four hex digits.
+fn read_hex4(data: &[u8], i: &mut usize) -> Result<u32, JsonError> {
+    let hex = data.get(*i..*i + 4).ok_or(JsonError::InvalidJson)?;
+    if !hex.iter().all(u8::is_ascii_hexdigit) {
+        return Err(JsonError::InvalidJson);
+    }
+    *i += 4;
+    // All four bytes are ASCII hex digits, so this is valid UTF-8 and parses.
+    let hex = std::str::from_utf8(hex).map_err(|_| JsonError::InvalidJson)?;
+    u32::from_str_radix(hex, 16).map_err(|_| JsonError::InvalidJson)
 }
 
 // Parallel encryption support
@@ -457,7 +492,7 @@ pub mod parallel {
                 b'{' => self.collect_object(data, i, strings)?,
                 b'[' => self.collect_array(data, i, strings, is_comment)?,
                 b'"' => {
-                    let content = read_string_raw_static(data, i)?;
+                    let content = read_string_raw(data, i)?;
                     strings.push(StringValue {
                         content,
                         is_comment,
@@ -500,7 +535,7 @@ pub mod parallel {
                     return Err(JsonError::InvalidJson);
                 }
 
-                let key = read_string_raw_static(data, i)?;
+                let key = read_string_raw(data, i)?;
                 let is_comment = key.starts_with(b"_");
 
                 skip_whitespace_no_output(data, i);
@@ -586,7 +621,7 @@ pub mod parallel {
                 }
                 b'"' => {
                     // Skip original string
-                    let _ = read_string_raw_static(data, i)?;
+                    let _ = read_string_raw(data, i)?;
                     // Output encrypted value
                     output.push(b'"');
                     escape_json_bytes_to(&encrypted[*string_idx], output);
@@ -636,7 +671,7 @@ pub mod parallel {
                     return Err(JsonError::InvalidJson);
                 }
 
-                let key = read_string_raw_static(data, i)?;
+                let key = read_string_raw(data, i)?;
                 let is_comment = key.starts_with(b"_");
 
                 output.push(b'"');
@@ -728,62 +763,6 @@ pub mod parallel {
             output.push(data[*i]);
             *i += 1;
         }
-    }
-
-    fn read_string_raw_static(data: &[u8], i: &mut usize) -> Result<Vec<u8>, JsonError> {
-        if *i >= data.len() || data[*i] != b'"' {
-            return Err(JsonError::InvalidJson);
-        }
-        *i += 1;
-
-        let mut result = Vec::with_capacity(64);
-        let mut escaped = false;
-
-        while *i < data.len() {
-            let c = data[*i];
-            *i += 1;
-
-            if escaped {
-                match c {
-                    b'"' => result.push(b'"'),
-                    b'\\' => result.push(b'\\'),
-                    b'/' => result.push(b'/'),
-                    b'b' => result.push(0x08),
-                    b'f' => result.push(0x0C),
-                    b'n' => result.push(b'\n'),
-                    b'r' => result.push(b'\r'),
-                    b't' => result.push(b'\t'),
-                    b'u' => {
-                        if *i + 4 > data.len() {
-                            return Err(JsonError::InvalidJson);
-                        }
-                        let hex = std::str::from_utf8(&data[*i..*i + 4])
-                            .map_err(|_| JsonError::InvalidJson)?;
-                        *i += 4;
-                        if let Ok(code) = u32::from_str_radix(hex, 16)
-                            && let Some(ch) = char::from_u32(code)
-                        {
-                            let mut buf = [0u8; 4];
-                            let encoded = ch.encode_utf8(&mut buf);
-                            result.extend_from_slice(encoded.as_bytes());
-                        }
-                    }
-                    _ => {
-                        result.push(b'\\');
-                        result.push(c);
-                    }
-                }
-                escaped = false;
-            } else if c == b'\\' {
-                escaped = true;
-            } else if c == b'"' {
-                return Ok(result);
-            } else {
-                result.push(c);
-            }
-        }
-
-        Err(JsonError::InvalidJson)
     }
 }
 
@@ -978,6 +957,40 @@ mod tests {
 
         // The inner value SHOULD be encrypted (underscore doesn't propagate)
         assert!(result_str.contains(r#""inner": "E:should_encrypt""#));
+    }
+
+    #[test]
+    fn test_walker_decodes_unicode_escapes() {
+        // BMP escape, surrogate pair (U+1F600), and raw UTF-8 must all reach
+        // the action as the same UTF-8 bytes serde_json would produce.
+        let json = r#"{"a": "x\u00e9y", "b": "pre\ud83d\ude00post", "c": "pre😀post"}"#.as_bytes();
+        let walker = Walker::new(|data| Ok(data.to_vec()));
+
+        let result = walker.walk(json).unwrap();
+        let parsed: Value = serde_json::from_slice(&result).unwrap();
+
+        assert_eq!(parsed["a"], "xéy");
+        assert_eq!(parsed["b"], "pre😀post");
+        assert_eq!(parsed["c"], "pre😀post");
+    }
+
+    #[test]
+    fn test_walker_rejects_malformed_unicode_escapes() {
+        let walker = Walker::new(|data| Ok(data.to_vec()));
+        for bad in [
+            br#"{"a": "\ud83d"}"#.as_slice(),       // lone high surrogate
+            br#"{"a": "\ud83dx"}"#.as_slice(),      // high surrogate, no escape after
+            br#"{"a": "\ud83d\u0041"}"#.as_slice(), // high surrogate + non-low
+            br#"{"a": "\ude00"}"#.as_slice(),       // lone low surrogate
+            br#"{"a": "\u00zz"}"#.as_slice(),       // invalid hex
+            br#"{"a": "\u00"}"#.as_slice(),         // truncated
+        ] {
+            assert!(
+                matches!(walker.walk(bad), Err(JsonError::InvalidJson)),
+                "expected InvalidJson for {}",
+                String::from_utf8_lossy(bad)
+            );
+        }
     }
 
     #[test]
