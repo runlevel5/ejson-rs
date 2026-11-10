@@ -71,3 +71,11 @@ path = "src/lib.rs"
 [[bench]]
 name = "encryption_benchmark"
 harness = false
+
+# Keep integer-overflow checks in release builds of our own code (they are on
+# by default only in debug builds). The hand-written JSON scanner and the size
+# and offset arithmetic then panic on an overflow instead of wrapping silently.
+# Dependencies, including the crypto crates, keep the default release settings
+# their authors test with.
+[profile.release.package.ejson]
+overflow-checks = true
