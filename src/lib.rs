@@ -62,12 +62,9 @@ pub use format::FileFormat;
 // Re-export handler trait for implementing custom formats
 use format::FileFormatError;
 pub use handler::{FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD};
-use json::JsonError;
 pub use typed::{DecryptedContent, DecryptedValue};
 
 use thiserror::Error;
-use toml::TomlError;
-use yaml::YamlError;
 use zeroize::Zeroizing;
 
 /// Where the private key for a document comes from.
@@ -119,36 +116,33 @@ pub const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 pub const MAX_KEY_FILE_SIZE: u64 = 64 * 1024;
 
 /// Errors that can occur during ejson operations.
+///
+/// The wrapping variants are transparent: their message is the inner error's
+/// message, with no extra prefix.
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum EjsonError {
-    #[error("crypto error: {0}")]
+    /// A key is malformed or doesn't match, or a value couldn't be encrypted
+    /// or decrypted outside of walking a document (see [`FormatError::ActionFailed`]).
+    #[error(transparent)]
     Crypto(#[from] CryptoError),
 
-    #[error("json error: {0}")]
-    Json(#[from] JsonError),
-
-    #[error("toml error: {0}")]
-    Toml(#[from] TomlError),
-
-    #[error("yaml error: {0}")]
-    Yaml(#[from] YamlError),
-
-    #[error("format error: {0}")]
+    /// The document is malformed, lacks a public key, or one of its values
+    /// couldn't be encrypted or decrypted.
+    #[error(transparent)]
     Format(#[from] FormatError),
 
-    #[error("file format error: {0}")]
+    /// The file extension doesn't name a supported format.
+    #[error(transparent)]
     FileFormat(#[from] FileFormatError),
 
-    #[error("io error: {0}")]
+    #[error(transparent)]
     Io(#[from] std::io::Error),
 
-    /// The message says which key (by public key prefix) and why.
+    /// The private key file couldn't be read. The message says which key (by
+    /// public key prefix) and why.
     #[error("{0}")]
     KeyFile(String),
-
-    #[error("invalid private key")]
-    InvalidPrivateKey,
 
     #[error("file too large (max {} bytes)", MAX_FILE_SIZE)]
     FileTooLarge,
@@ -719,14 +713,16 @@ pub fn decrypt_file_typed<P: AsRef<Path>>(
 fn parse_decrypted(bytes: &[u8], format: FileFormat) -> Result<DecryptedContent, EjsonError> {
     Ok(match format {
         FileFormat::Json => DecryptedContent::Json(
-            serde_json::from_slice(bytes).map_err(|_| JsonError::InvalidJson)?,
+            serde_json::from_slice(bytes).map_err(|e| json::json_syntax_error(&e))?,
         ),
         FileFormat::Yaml => {
             DecryptedContent::Yaml(serde_norway::from_slice(bytes).map_err(yaml::invalid_yaml)?)
         }
         FileFormat::Toml => {
-            let s =
-                std::str::from_utf8(bytes).map_err(|e| TomlError::InvalidToml(e.to_string()))?;
+            let s = std::str::from_utf8(bytes).map_err(|e| FormatError::InvalidSyntax {
+                format: "TOML",
+                message: e.to_string(),
+            })?;
             DecryptedContent::Toml(toml::parse_value(s)?)
         }
     })
@@ -759,13 +755,7 @@ fn find_private_key(
         KeySource::PrivateKey(private_key) => private_key,
     };
 
-    // Malformed key material is surfaced as the stable `InvalidPrivateKey`
-    // error; a well-formed key that doesn't match the public key surfaces as
-    // the underlying crypto error.
-    keys::PrivateKey::parse_for_public(pubkey, privkey_string).map_err(|e| match e {
-        CryptoError::InvalidPrivateKey => EjsonError::InvalidPrivateKey,
-        other => EjsonError::Crypto(other),
-    })
+    Ok(keys::PrivateKey::parse_for_public(pubkey, privkey_string)?)
 }
 
 /// Read the private key for `pubkey` from `keydir`.
@@ -1354,7 +1344,7 @@ secret: "my secret"
         assert!(decrypt_file(&path, KeySource::Keydir(temp_dir.path()), false).is_ok());
         assert!(matches!(
             decrypt_file(&path, KeySource::PrivateKey(""), false),
-            Err(EjsonError::InvalidPrivateKey)
+            Err(EjsonError::Crypto(CryptoError::InvalidPrivateKey))
         ));
     }
 
@@ -1460,14 +1450,9 @@ secret: "my secret"
                 ),
                 "{name}: {err:?}"
             );
-            // ...is reachable through the standard error chain...
-            let cause = err.source().and_then(|e| e.source()).unwrap();
-            assert_eq!(cause.to_string(), "couldn't decrypt message");
-            // ...and the message users see is unchanged.
-            assert_eq!(
-                err.to_string(),
-                "format error: action failed: couldn't decrypt message"
-            );
+            // ...and the message is the cause's, with no wrapper prefixes.
+            assert_eq!(err.to_string(), "couldn't decrypt message");
+            assert!(err.source().is_none());
         }
     }
 
@@ -1572,7 +1557,10 @@ secret: "my secret"
     fn test_invalid_private_key_length() {
         let pubkey = keys::PublicKey::Legacy([0u8; 32]);
         let result = find_private_key(&pubkey, KeySource::PrivateKey("deadbeef")); // Too short
-        assert!(matches!(result, Err(EjsonError::InvalidPrivateKey)));
+        assert!(matches!(
+            result,
+            Err(EjsonError::Crypto(CryptoError::InvalidPrivateKey))
+        ));
     }
 
     #[test]

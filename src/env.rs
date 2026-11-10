@@ -156,7 +156,8 @@ pub enum EnvError {
     #[error("invalid identifier as key in environment: {0:?}")]
     InvalidIdentifier(String),
 
-    #[error("ejson error: {0}")]
+    /// Reading or decrypting the file failed. The message is the cause's.
+    #[error(transparent)]
     Ejson(#[from] EjsonError),
 
     #[error("could not write environment: {0}")]

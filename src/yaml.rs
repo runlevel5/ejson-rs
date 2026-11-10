@@ -11,34 +11,18 @@ use crate::handler::{
     FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, WalkAction, decode_legacy_public_key,
 };
 use serde_norway::{Mapping, Value};
-use thiserror::Error;
 
-/// Errors that can occur during YAML processing.
-#[derive(Error, Debug)]
-#[non_exhaustive]
-pub enum YamlError {
-    #[error("public key not present in EYAML file")]
-    PublicKeyMissing,
-
-    #[error("public key has invalid format")]
-    PublicKeyInvalid,
-
-    #[error("invalid yaml: {0}")]
-    InvalidYaml(String),
-
-    /// Encrypting or decrypting a value failed; the cause is the `source`.
-    #[error("action failed: {0}")]
-    ActionFailed(#[source] CryptoError),
-}
-
-/// Build an `InvalidYaml` error that never quotes document values.
+/// Build a syntax error that never quotes document values.
 ///
 /// Parser errors from `serde_norway` only give a location, but deserialisation
 /// errors echo the offending value (`invalid value: string "hunter2", ...`),
 /// which in an EYAML file is often a plaintext secret. Quoted fragments are
 /// redacted; the rest of the message and the location are kept.
-pub(crate) fn invalid_yaml(err: serde_norway::Error) -> YamlError {
-    YamlError::InvalidYaml(redact_quoted(&err.to_string()))
+pub(crate) fn invalid_yaml(err: serde_norway::Error) -> FormatError {
+    FormatError::InvalidSyntax {
+        format: "YAML",
+        message: redact_quoted(&err.to_string()),
+    }
 }
 
 /// Replace the contents of `"..."` and `` `...` `` fragments with `...`.
@@ -68,24 +52,24 @@ fn redact_quoted(msg: &str) -> String {
 }
 
 /// Extract the raw `_public_key` string value from an EYAML document.
-pub fn extract_public_key_string(data: &[u8]) -> Result<String, YamlError> {
+pub fn extract_public_key_string(data: &[u8]) -> Result<String, FormatError> {
     let s = String::from_utf8_lossy(data);
     let doc: Value = serde_norway::from_str(&s).map_err(invalid_yaml)?;
 
     let key_value = doc
         .get(PUBLIC_KEY_FIELD)
-        .ok_or(YamlError::PublicKeyMissing)?;
+        .ok_or(FormatError::PublicKeyMissing)?;
 
     key_value
         .as_str()
         .map(str::to_string)
-        .ok_or(YamlError::PublicKeyInvalid)
+        .ok_or(FormatError::PublicKeyInvalid)
 }
 
 /// Extract the _public_key value from an EYAML document as a legacy 32-byte key.
-pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], YamlError> {
+pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError> {
     let key_str = extract_public_key_string(data)?;
-    decode_legacy_public_key(&key_str).ok_or(YamlError::PublicKeyInvalid)
+    decode_legacy_public_key(&key_str).ok_or(FormatError::PublicKeyInvalid)
 }
 
 /// Walker walks a YAML structure, applying an action to encryptable string values.
@@ -121,7 +105,7 @@ where
     }
 
     /// Walk the YAML data and apply the action to encryptable values.
-    pub fn walk(&self, data: &[u8]) -> Result<Vec<u8>, YamlError> {
+    pub fn walk(&self, data: &[u8]) -> Result<Vec<u8>, FormatError> {
         let s = String::from_utf8_lossy(data);
         let mut doc: Value = serde_norway::from_str(&s).map_err(invalid_yaml)?;
 
@@ -132,10 +116,10 @@ where
         Ok(output.into_bytes())
     }
 
-    fn walk_value(&self, value: &mut Value, is_comment: bool) -> Result<(), YamlError> {
+    fn walk_value(&self, value: &mut Value, is_comment: bool) -> Result<(), FormatError> {
         match value {
             Value::String(s) if !is_comment => {
-                let result = (self.action)(s.as_bytes()).map_err(YamlError::ActionFailed)?;
+                let result = (self.action)(s.as_bytes())?;
                 *s = String::from_utf8_lossy(&result).to_string();
             }
             Value::Mapping(map) => {
@@ -157,7 +141,7 @@ where
         Ok(())
     }
 
-    fn walk_mapping(&self, map: &mut Mapping) -> Result<(), YamlError> {
+    fn walk_mapping(&self, map: &mut Mapping) -> Result<(), FormatError> {
         // Collect keys first to avoid borrow issues
         let keys: Vec<Value> = map.keys().cloned().collect();
 
@@ -190,7 +174,7 @@ where
 /// they are encrypted and not reported.) Returns the dotted path of each such value
 /// (e.g. `db.port`, `pins[0]`) in a position that would otherwise be
 /// encrypted, i.e. not under an `_`-prefixed key.
-pub fn plaintext_scalar_paths(data: &[u8]) -> Result<Vec<String>, YamlError> {
+pub fn plaintext_scalar_paths(data: &[u8]) -> Result<Vec<String>, FormatError> {
     let s = String::from_utf8_lossy(data);
     let doc: Value = serde_norway::from_str(&s).map_err(invalid_yaml)?;
     let mut paths = Vec::new();
@@ -226,7 +210,7 @@ fn collect_plaintext_scalars(value: &Value, path: String, is_comment: bool, out:
 
 /// Trim the first leading underscore from all keys in a YAML document.
 /// The `_public_key` field is excluded from trimming.
-pub fn trim_underscore_prefix_from_keys(data: &[u8]) -> Result<Vec<u8>, YamlError> {
+pub fn trim_underscore_prefix_from_keys(data: &[u8]) -> Result<Vec<u8>, FormatError> {
     let s = String::from_utf8_lossy(data);
     let doc: Value = serde_norway::from_str(&s).map_err(invalid_yaml)?;
 
@@ -269,21 +253,6 @@ fn transform_yaml_keys(value: Value) -> Value {
 // FormatHandler trait implementation
 // ============================================================================
 
-/// Convert YamlError to the unified FormatError.
-impl From<YamlError> for FormatError {
-    fn from(err: YamlError) -> Self {
-        match err {
-            YamlError::PublicKeyMissing => FormatError::PublicKeyMissing,
-            YamlError::PublicKeyInvalid => FormatError::PublicKeyInvalid,
-            YamlError::InvalidYaml(msg) => FormatError::InvalidSyntax {
-                format: "YAML",
-                message: msg,
-            },
-            YamlError::ActionFailed(source) => FormatError::ActionFailed(source),
-        }
-    }
-}
-
 /// YAML format handler implementing the FormatHandler trait.
 ///
 /// This handler uses `serde_norway` for parsing and serialization.
@@ -303,15 +272,15 @@ impl FormatHandler for YamlHandler {
     }
 
     fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError> {
-        extract_public_key_string(data).map_err(Into::into)
+        extract_public_key_string(data)
     }
 
     fn walk(&self, data: &[u8], action: WalkAction<'_>) -> Result<Vec<u8>, FormatError> {
-        Walker::new(action).walk(data).map_err(Into::into)
+        Walker::new(action).walk(data)
     }
 
     fn trim_underscore_prefix_from_keys(&self, data: &[u8]) -> Result<Vec<u8>, FormatError> {
-        trim_underscore_prefix_from_keys(data).map_err(Into::into)
+        trim_underscore_prefix_from_keys(data)
     }
 }
 
@@ -337,7 +306,7 @@ secret: "value"
         let yaml = br#"secret: "value""#;
         assert!(matches!(
             extract_public_key(yaml),
-            Err(YamlError::PublicKeyMissing)
+            Err(FormatError::PublicKeyMissing)
         ));
     }
 

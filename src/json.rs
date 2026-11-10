@@ -15,29 +15,27 @@ use crate::handler::{
 };
 use serde::de::{Deserialize, Deserializer, IgnoredAny, MapAccess, Visitor};
 use serde_json::Value;
-use thiserror::Error;
 use zeroize::Zeroizing;
 
-/// Errors that can occur during JSON processing.
-#[derive(Error, Debug)]
-#[non_exhaustive]
-pub enum JsonError {
-    #[error("public key not present in EJSON file")]
-    PublicKeyMissing,
+/// A syntax error found by the walker, which doesn't track positions.
+fn invalid_json() -> FormatError {
+    FormatError::InvalidSyntax {
+        format: "JSON",
+        message: "syntax error".to_string(),
+    }
+}
 
-    #[error("public key has invalid format")]
-    PublicKeyInvalid,
-
-    #[error("invalid json")]
-    InvalidJson,
-
-    /// Objects and arrays are nested more than [`MAX_DEPTH`] levels deep.
-    #[error("json is nested more than {MAX_DEPTH} levels deep")]
-    NestingTooDeep,
-
-    /// Encrypting or decrypting a value failed; the cause is the `source`.
-    #[error("action failed: {0}")]
-    ActionFailed(#[source] CryptoError),
+/// A syntax error reported by `serde_json`. Only the position is used: the
+/// rest of its message can describe the document's contents.
+pub(crate) fn json_syntax_error(err: &serde_json::Error) -> FormatError {
+    FormatError::InvalidSyntax {
+        format: "JSON",
+        message: format!(
+            "syntax error at line {}, column {}",
+            err.line(),
+            err.column()
+        ),
+    }
 }
 
 /// Maximum nesting depth of objects and arrays that [`Walker`] accepts.
@@ -54,22 +52,22 @@ pub const MAX_DEPTH: usize = 127;
 /// The value is returned uninterpreted; scheme detection happens in [`crate::keys`].
 ///
 /// A document that defines `_public_key` more than once at the top level is
-/// rejected with [`JsonError::PublicKeyInvalid`].
-pub fn extract_public_key_string(data: &[u8]) -> Result<String, JsonError> {
-    let obj: Value = serde_json::from_slice(data).map_err(|_| JsonError::InvalidJson)?;
+/// rejected with [`FormatError::PublicKeyInvalid`].
+pub fn extract_public_key_string(data: &[u8]) -> Result<String, FormatError> {
+    let obj: Value = serde_json::from_slice(data).map_err(|e| json_syntax_error(&e))?;
 
     if has_duplicate_public_key(data) {
-        return Err(JsonError::PublicKeyInvalid);
+        return Err(FormatError::PublicKeyInvalid);
     }
 
     let key_value = obj
         .get(PUBLIC_KEY_FIELD)
-        .ok_or(JsonError::PublicKeyMissing)?;
+        .ok_or(FormatError::PublicKeyMissing)?;
 
     key_value
         .as_str()
         .map(str::to_string)
-        .ok_or(JsonError::PublicKeyInvalid)
+        .ok_or(FormatError::PublicKeyInvalid)
 }
 
 /// Returns true if the top-level object defines `_public_key` more than once.
@@ -112,9 +110,9 @@ pub fn has_duplicate_public_key(data: &[u8]) -> bool {
 }
 
 /// Extract the _public_key value from an EJSON document as a legacy 32-byte key.
-pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], JsonError> {
+pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError> {
     let key_str = extract_public_key_string(data)?;
-    decode_legacy_public_key(&key_str).ok_or(JsonError::PublicKeyInvalid)
+    decode_legacy_public_key(&key_str).ok_or(FormatError::PublicKeyInvalid)
 }
 
 /// Walker walks a JSON structure, applying an action to encryptable string values.
@@ -150,7 +148,7 @@ where
     }
 
     /// Walk the JSON data and apply the action to encryptable values.
-    pub fn walk(&self, data: &[u8]) -> Result<Vec<u8>, JsonError> {
+    pub fn walk(&self, data: &[u8]) -> Result<Vec<u8>, FormatError> {
         // First, collapse multiline string literals. The copy, made only if
         // there are any, holds plaintext when encrypting, so it is wiped.
         let collapsed = collapse_multiline(data).map(Zeroizing::new);
@@ -178,7 +176,7 @@ where
         output: &mut Vec<u8>,
         is_comment: bool,
         depth: usize,
-    ) -> Result<(), JsonError> {
+    ) -> Result<(), FormatError> {
         self.skip_whitespace(data, i, output);
 
         if *i >= data.len() {
@@ -187,7 +185,10 @@ where
 
         // `depth` is the number of objects and arrays this value is inside.
         if matches!(data[*i], b'{' | b'[') && depth >= MAX_DEPTH {
-            return Err(JsonError::NestingTooDeep);
+            return Err(FormatError::NestingTooDeep {
+                format: "JSON",
+                max: MAX_DEPTH,
+            });
         }
 
         match data[*i] {
@@ -206,7 +207,7 @@ where
         i: &mut usize,
         output: &mut Vec<u8>,
         depth: usize,
-    ) -> Result<(), JsonError> {
+    ) -> Result<(), FormatError> {
         // Output '{'
         output.push(data[*i]);
         *i += 1;
@@ -224,12 +225,12 @@ where
             self.skip_whitespace(data, i, output);
 
             if *i >= data.len() {
-                return Err(JsonError::InvalidJson);
+                return Err(invalid_json());
             }
 
             // Parse key (must be a string)
             if data[*i] != b'"' {
-                return Err(JsonError::InvalidJson);
+                return Err(invalid_json());
             }
 
             let key = self.read_string_raw(data, i)?;
@@ -244,7 +245,7 @@ where
 
             // Expect ':'
             if *i >= data.len() || data[*i] != b':' {
-                return Err(JsonError::InvalidJson);
+                return Err(invalid_json());
             }
             output.push(data[*i]);
             *i += 1;
@@ -255,7 +256,7 @@ where
             self.skip_whitespace(data, i, output);
 
             if *i >= data.len() {
-                return Err(JsonError::InvalidJson);
+                return Err(invalid_json());
             }
 
             if data[*i] == b'}' {
@@ -266,7 +267,7 @@ where
                 output.push(data[*i]);
                 *i += 1;
             } else {
-                return Err(JsonError::InvalidJson);
+                return Err(invalid_json());
             }
         }
     }
@@ -278,7 +279,7 @@ where
         output: &mut Vec<u8>,
         is_comment: bool,
         depth: usize,
-    ) -> Result<(), JsonError> {
+    ) -> Result<(), FormatError> {
         // Output '['
         output.push(data[*i]);
         *i += 1;
@@ -298,7 +299,7 @@ where
             self.skip_whitespace(data, i, output);
 
             if *i >= data.len() {
-                return Err(JsonError::InvalidJson);
+                return Err(invalid_json());
             }
 
             if data[*i] == b']' {
@@ -309,7 +310,7 @@ where
                 output.push(data[*i]);
                 *i += 1;
             } else {
-                return Err(JsonError::InvalidJson);
+                return Err(invalid_json());
             }
         }
     }
@@ -320,7 +321,7 @@ where
         i: &mut usize,
         output: &mut Vec<u8>,
         is_comment: bool,
-    ) -> Result<(), JsonError> {
+    ) -> Result<(), FormatError> {
         // Either side of the action may be plaintext (input when encrypting,
         // result when decrypting), so both are wiped once copied to `output`.
         let string_content = Zeroizing::new(self.read_string_raw(data, i)?);
@@ -332,8 +333,7 @@ where
             output.push(b'"');
         } else {
             // Apply the action (encrypt/decrypt)
-            let result =
-                Zeroizing::new((self.action)(&string_content).map_err(JsonError::ActionFailed)?);
+            let result = Zeroizing::new((self.action)(&string_content)?);
 
             // Output the result as a JSON string
             output.push(b'"');
@@ -349,7 +349,7 @@ where
         data: &[u8],
         i: &mut usize,
         output: &mut Vec<u8>,
-    ) -> Result<(), JsonError> {
+    ) -> Result<(), FormatError> {
         // Read numbers, booleans, null
         while *i < data.len() {
             let c = data[*i];
@@ -364,7 +364,7 @@ where
     }
 
     /// Read a JSON string and return its unescaped content as bytes.
-    fn read_string_raw(&self, data: &[u8], i: &mut usize) -> Result<Vec<u8>, JsonError> {
+    fn read_string_raw(&self, data: &[u8], i: &mut usize) -> Result<Vec<u8>, FormatError> {
         read_string_raw(data, i)
     }
 
@@ -403,9 +403,9 @@ fn escape_json_bytes_to(s: &[u8], output: &mut Vec<u8>) {
 /// pairs for characters outside the Basic Multilingual Plane. Malformed
 /// escapes are an error rather than being dropped: silently changing a value
 /// here would corrupt the secret that gets encrypted.
-fn read_string_raw(data: &[u8], i: &mut usize) -> Result<Vec<u8>, JsonError> {
+fn read_string_raw(data: &[u8], i: &mut usize) -> Result<Vec<u8>, FormatError> {
     if *i >= data.len() || data[*i] != b'"' {
-        return Err(JsonError::InvalidJson);
+        return Err(invalid_json());
     }
     *i += 1; // Skip opening quote
 
@@ -446,42 +446,42 @@ fn read_string_raw(data: &[u8], i: &mut usize) -> Result<Vec<u8>, JsonError> {
         }
     }
 
-    Err(JsonError::InvalidJson)
+    Err(invalid_json())
 }
 
 /// Decode the code point of a `\uXXXX` escape whose `\u` has already been
 /// consumed, consuming a trailing `\uXXXX` low surrogate when the first one is
 /// a high surrogate.
-fn read_unicode_escape(data: &[u8], i: &mut usize) -> Result<char, JsonError> {
+fn read_unicode_escape(data: &[u8], i: &mut usize) -> Result<char, FormatError> {
     let first = read_hex4(data, i)?;
     let code = match first {
         0xD800..=0xDBFF => {
             if data.get(*i..*i + 2) != Some(b"\\u") {
-                return Err(JsonError::InvalidJson);
+                return Err(invalid_json());
             }
             *i += 2;
             let second = read_hex4(data, i)?;
             if !(0xDC00..=0xDFFF).contains(&second) {
-                return Err(JsonError::InvalidJson);
+                return Err(invalid_json());
             }
             0x10000 + ((first - 0xD800) << 10) + (second - 0xDC00)
         }
-        0xDC00..=0xDFFF => return Err(JsonError::InvalidJson),
+        0xDC00..=0xDFFF => return Err(invalid_json()),
         _ => first,
     };
-    char::from_u32(code).ok_or(JsonError::InvalidJson)
+    char::from_u32(code).ok_or_else(invalid_json)
 }
 
 /// Read exactly four hex digits.
-fn read_hex4(data: &[u8], i: &mut usize) -> Result<u32, JsonError> {
-    let hex = data.get(*i..*i + 4).ok_or(JsonError::InvalidJson)?;
+fn read_hex4(data: &[u8], i: &mut usize) -> Result<u32, FormatError> {
+    let hex = data.get(*i..*i + 4).ok_or_else(invalid_json)?;
     if !hex.iter().all(u8::is_ascii_hexdigit) {
-        return Err(JsonError::InvalidJson);
+        return Err(invalid_json());
     }
     *i += 4;
     // All four bytes are ASCII hex digits, so this is valid UTF-8 and parses.
-    let hex = std::str::from_utf8(hex).map_err(|_| JsonError::InvalidJson)?;
-    u32::from_str_radix(hex, 16).map_err(|_| JsonError::InvalidJson)
+    let hex = std::str::from_utf8(hex).map_err(|_| invalid_json())?;
+    u32::from_str_radix(hex, 16).map_err(|_| invalid_json())
 }
 
 /// Trim the first leading underscore from all keys in a JSON document.
@@ -489,10 +489,10 @@ fn read_hex4(data: &[u8], i: &mut usize) -> Result<u32, JsonError> {
 ///
 /// This uses serde_json to parse and rebuild the JSON, which means formatting
 /// may change slightly (though keys order is preserved).
-pub fn trim_underscore_prefix_from_keys(data: &[u8]) -> Result<Vec<u8>, JsonError> {
-    let value: Value = serde_json::from_slice(data).map_err(|_| JsonError::InvalidJson)?;
+pub fn trim_underscore_prefix_from_keys(data: &[u8]) -> Result<Vec<u8>, FormatError> {
+    let value: Value = serde_json::from_slice(data).map_err(|e| json_syntax_error(&e))?;
     let transformed = transform_json_keys(value);
-    serde_json::to_vec_pretty(&transformed).map_err(|_| JsonError::InvalidJson)
+    serde_json::to_vec_pretty(&transformed).map_err(|e| json_syntax_error(&e))
 }
 
 fn transform_json_keys(value: Value) -> Value {
@@ -520,7 +520,7 @@ fn transform_json_keys(value: Value) -> Value {
 ///
 /// JSON doesn't handle multiline literals, so we convert embedded newlines
 /// in string literals to escape sequences.
-pub fn collapse_multiline_string_literals(data: &[u8]) -> Result<Vec<u8>, JsonError> {
+pub fn collapse_multiline_string_literals(data: &[u8]) -> Result<Vec<u8>, FormatError> {
     Ok(collapse_multiline(data).unwrap_or_else(|| data.to_vec()))
 }
 
@@ -569,25 +569,6 @@ fn collapse_multiline(data: &[u8]) -> Option<Vec<u8>> {
 // FormatHandler trait implementation
 // ============================================================================
 
-/// Convert JsonError to the unified FormatError.
-impl From<JsonError> for FormatError {
-    fn from(err: JsonError) -> Self {
-        match err {
-            JsonError::PublicKeyMissing => FormatError::PublicKeyMissing,
-            JsonError::PublicKeyInvalid => FormatError::PublicKeyInvalid,
-            JsonError::InvalidJson => FormatError::InvalidSyntax {
-                format: "JSON",
-                message: "invalid JSON syntax".to_string(),
-            },
-            JsonError::NestingTooDeep => FormatError::InvalidSyntax {
-                format: "JSON",
-                message: err.to_string(),
-            },
-            JsonError::ActionFailed(source) => FormatError::ActionFailed(source),
-        }
-    }
-}
-
 /// JSON format handler implementing the FormatHandler trait.
 ///
 /// This handler uses a scanner-based approach to preserve formatting
@@ -614,19 +595,19 @@ impl FormatHandler for JsonHandler {
                 message: format!("`{PUBLIC_KEY_FIELD}` is defined more than once"),
             });
         }
-        extract_public_key_string(data).map_err(Into::into)
+        extract_public_key_string(data)
     }
 
     fn walk(&self, data: &[u8], action: WalkAction<'_>) -> Result<Vec<u8>, FormatError> {
-        Walker::new(action).walk(data).map_err(Into::into)
+        Walker::new(action).walk(data)
     }
 
     fn trim_underscore_prefix_from_keys(&self, data: &[u8]) -> Result<Vec<u8>, FormatError> {
-        trim_underscore_prefix_from_keys(data).map_err(Into::into)
+        trim_underscore_prefix_from_keys(data)
     }
 
     fn preprocess(&self, data: &[u8]) -> Result<Vec<u8>, FormatError> {
-        collapse_multiline_string_literals(data).map_err(Into::into)
+        collapse_multiline_string_literals(data)
     }
 }
 
@@ -649,7 +630,7 @@ mod tests {
         let json = br#"{"secret": "value"}"#;
         assert!(matches!(
             extract_public_key(json),
-            Err(JsonError::PublicKeyMissing)
+            Err(FormatError::PublicKeyMissing)
         ));
     }
 
@@ -659,7 +640,7 @@ mod tests {
         assert!(has_duplicate_public_key(json));
         assert!(matches!(
             extract_public_key_string(json),
-            Err(JsonError::PublicKeyInvalid)
+            Err(FormatError::PublicKeyInvalid)
         ));
         assert!(matches!(
             JsonHandler.extract_public_key_string(json),
@@ -708,7 +689,7 @@ mod tests {
                     "{open} x {levels}"
                 );
                 if !serde_ok {
-                    assert!(matches!(walked, Err(JsonError::NestingTooDeep)));
+                    assert!(matches!(walked, Err(FormatError::NestingTooDeep { .. })));
                 }
             }
         }
@@ -723,14 +704,17 @@ mod tests {
         for doc in ["[".repeat(1_000_000), r#"{"a":"#.repeat(1_000_000)] {
             assert!(matches!(
                 walker.walk(doc.as_bytes()),
-                Err(JsonError::NestingTooDeep)
+                Err(FormatError::NestingTooDeep { .. })
             ));
         }
 
-        let err = FormatError::from(JsonError::NestingTooDeep);
+        let err = FormatError::NestingTooDeep {
+            format: "JSON",
+            max: MAX_DEPTH,
+        };
         assert_eq!(
             err.to_string(),
-            "invalid JSON syntax: json is nested more than 127 levels deep"
+            "invalid JSON: nested more than 127 levels deep"
         );
     }
 
@@ -801,7 +785,7 @@ mod tests {
             br#"{"a": "\u00"}"#.as_slice(),         // truncated
         ] {
             assert!(
-                matches!(walker.walk(bad), Err(JsonError::InvalidJson)),
+                matches!(walker.walk(bad), Err(FormatError::InvalidSyntax { .. })),
                 "expected InvalidJson for {}",
                 String::from_utf8_lossy(bad)
             );
