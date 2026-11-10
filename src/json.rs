@@ -13,6 +13,7 @@ use crate::handler::{FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, Wal
 use serde::de::{Deserialize, Deserializer, IgnoredAny, MapAccess, Visitor};
 use serde_json::Value;
 use thiserror::Error;
+use zeroize::Zeroizing;
 
 /// Errors that can occur during JSON processing.
 #[derive(Error, Debug)]
@@ -291,7 +292,9 @@ where
         output: &mut Vec<u8>,
         is_comment: bool,
     ) -> Result<(), JsonError> {
-        let string_content = self.read_string_raw(data, i)?;
+        // Either side of the action may be plaintext (input when encrypting,
+        // result when decrypting), so both are wiped once copied to `output`.
+        let string_content = Zeroizing::new(self.read_string_raw(data, i)?);
 
         if is_comment {
             // Don't encrypt, output as-is
@@ -300,7 +303,8 @@ where
             output.push(b'"');
         } else {
             // Apply the action (encrypt/decrypt)
-            let result = (self.action)(&string_content).map_err(JsonError::ActionFailed)?;
+            let result =
+                Zeroizing::new((self.action)(&string_content).map_err(JsonError::ActionFailed)?);
 
             // Output the result as a JSON string
             output.push(b'"');

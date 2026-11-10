@@ -71,7 +71,7 @@ fn benchmark_format(format_name: &str, content: &str, extension: &str, iteration
 
 fn main() {
     // Generate keypair
-    let (pub_key, _priv_key) = ejson::generate_keypair().unwrap();
+    let (pub_key, _priv_key, _) = ejson::generate_keypair_for_scheme("v1").unwrap();
 
     println!("=== Encryption Benchmark (avg of 5 runs) ===\n");
 

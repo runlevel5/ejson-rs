@@ -98,6 +98,11 @@ pub enum EjsonError {
 ///
 /// Returns the public and private keys as hex-encoded strings.
 /// Note: The private key string should be handled securely by the caller.
+#[deprecated(
+    since = "1.1.0",
+    note = "returns the private key in a plain `String` that is never wiped; \
+            use `generate_keypair_for_scheme(\"v1\")`, which returns it in `Zeroizing`"
+)]
 pub fn generate_keypair() -> Result<(String, String), EjsonError> {
     let kp = Keypair::generate()?;
     Ok((kp.public_string(), kp.private_string()))
@@ -502,20 +507,21 @@ pub fn decrypt_file<P: AsRef<Path>>(
     let file_path = file_path.as_ref();
     let format = FileFormat::from_path(file_path)?;
     let data = read_file_with_lock(file_path)?;
-    let mut output = Vec::new();
+    let mut output = Zeroizing::new(Vec::new());
     decrypt_data(
         &data,
-        &mut output,
+        &mut *output,
         keydir,
         user_supplied_private_key,
         format,
     )?;
 
     if trim_underscore_prefix {
-        output = trim_underscore_prefix_from_keys(&output, format)?;
+        // The untrimmed copy is wiped when `output` is replaced.
+        output = Zeroizing::new(trim_underscore_prefix_from_keys(&output, format)?);
     }
 
-    Ok(output)
+    Ok(std::mem::take(&mut *output))
 }
 
 /// Decrypt bytes and return the decrypted contents as a typed value.
@@ -559,12 +565,19 @@ pub fn decrypt_bytes_typed(
         return Err(EjsonError::FileTooLarge);
     }
 
-    // Decrypt to bytes first
-    let mut output = Vec::new();
-    decrypt_data(data, &mut output, keydir, user_supplied_private_key, format)?;
+    // Decrypt to bytes first. Both intermediate buffers hold plaintext and
+    // are wiped once the typed value has been parsed from them.
+    let mut output = Zeroizing::new(Vec::new());
+    decrypt_data(
+        data,
+        &mut *output,
+        keydir,
+        user_supplied_private_key,
+        format,
+    )?;
 
     let decrypted_bytes = if trim_underscore_prefix {
-        trim_underscore_prefix_from_keys(&output, format)?
+        Zeroizing::new(trim_underscore_prefix_from_keys(&output, format)?)
     } else {
         output
     };
@@ -629,13 +642,13 @@ pub fn decrypt_file_typed<P: AsRef<Path>>(
     let file_path = file_path.as_ref();
     let format = FileFormat::from_path(file_path)?;
 
-    // Decrypt to bytes first
-    let decrypted_bytes = decrypt_file(
+    // Decrypt to bytes first; wiped once the typed value has been parsed.
+    let decrypted_bytes = Zeroizing::new(decrypt_file(
         file_path,
         keydir,
         user_supplied_private_key,
         trim_underscore_prefix,
-    )?;
+    )?);
 
     // Parse based on format
     let content = match format {
@@ -782,6 +795,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_generate_keypair() {
         let (pub_key, priv_key) = generate_keypair().unwrap();
         assert_eq!(pub_key.len(), 64);
