@@ -45,16 +45,19 @@ impl fmt::Display for FileFormat {
 impl FileFormat {
     /// Detect the file format from a file path based on extension.
     ///
+    /// The extension is matched case-insensitively (`secrets.JSON` is JSON).
     /// Returns an error if the extension is not recognized or missing.
     pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Self, FileFormatError> {
-        match path.as_ref().extension().and_then(OsStr::to_str) {
-            Some("eyaml") | Some("eyml") | Some("yaml") | Some("yml") => Ok(FileFormat::Yaml),
-            Some("ejson") | Some("json") => Ok(FileFormat::Json),
-            Some("etoml") | Some("toml") => Ok(FileFormat::Toml),
-            Some(ext) => Err(FileFormatError::UnsupportedFileExtension(ext.to_string())),
-            None => Err(FileFormatError::UnsupportedFileExtension(
+        let Some(ext) = path.as_ref().extension().and_then(OsStr::to_str) else {
+            return Err(FileFormatError::UnsupportedFileExtension(
                 "(none)".to_string(),
-            )),
+            ));
+        };
+        match ext.to_ascii_lowercase().as_str() {
+            "eyaml" | "eyml" | "yaml" | "yml" => Ok(FileFormat::Yaml),
+            "ejson" | "json" => Ok(FileFormat::Json),
+            "etoml" | "toml" => Ok(FileFormat::Toml),
+            _ => Err(FileFormatError::UnsupportedFileExtension(ext.to_string())),
         }
     }
 
@@ -152,6 +155,26 @@ mod tests {
 
         let err = FileFormat::from_path("file.xml").unwrap_err();
         assert!(matches!(err, FileFormatError::UnsupportedFileExtension(ext) if ext == "xml"));
+    }
+
+    #[test]
+    fn test_from_path_is_case_insensitive() {
+        for (path, format) in [
+            ("secrets.JSON", FileFormat::Json),
+            ("secrets.Ejson", FileFormat::Json),
+            ("secrets.YAML", FileFormat::Yaml),
+            ("secrets.eYml", FileFormat::Yaml),
+            ("dir/secrets.EToml", FileFormat::Toml),
+            ("secrets.TOML", FileFormat::Toml),
+        ] {
+            assert_eq!(FileFormat::from_path(path).unwrap(), format, "{path}");
+        }
+    }
+
+    #[test]
+    fn test_from_path_unsupported_extension_keeps_original_case() {
+        let err = FileFormat::from_path("secrets.TXT").unwrap_err();
+        assert!(matches!(err, FileFormatError::UnsupportedFileExtension(ext) if ext == "TXT"));
     }
 
     #[test]
