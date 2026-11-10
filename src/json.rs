@@ -9,7 +9,9 @@
 
 use std::fmt;
 
-use crate::handler::{FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, WalkAction};
+use crate::handler::{
+    FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, WalkAction, decode_legacy_public_key,
+};
 use serde::de::{Deserialize, Deserializer, IgnoredAny, MapAccess, Visitor};
 use serde_json::Value;
 use thiserror::Error;
@@ -96,16 +98,7 @@ pub fn has_duplicate_public_key(data: &[u8]) -> bool {
 /// Extract the _public_key value from an EJSON document as a legacy 32-byte key.
 pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], JsonError> {
     let key_str = extract_public_key_string(data)?;
-
-    if key_str.len() != KEY_SIZE * 2 {
-        return Err(JsonError::PublicKeyInvalid);
-    }
-
-    let key_bytes = hex::decode(&key_str).map_err(|_| JsonError::PublicKeyInvalid)?;
-
-    key_bytes
-        .try_into()
-        .map_err(|_| JsonError::PublicKeyInvalid)
+    decode_legacy_public_key(&key_str).ok_or(JsonError::PublicKeyInvalid)
 }
 
 /// Walker walks a JSON structure, applying an action to encryptable string values.
@@ -132,14 +125,16 @@ where
 
     /// Walk the JSON data and apply the action to encryptable values.
     pub fn walk(&self, data: &[u8]) -> Result<Vec<u8>, JsonError> {
-        // First, collapse multiline string literals
-        let data = collapse_multiline_string_literals(data)?;
+        // First, collapse multiline string literals. The copy, made only if
+        // there are any, holds plaintext when encrypting, so it is wiped.
+        let collapsed = collapse_multiline(data).map(Zeroizing::new);
+        let data = collapsed.as_ref().map_or(data, |v| v.as_slice());
 
         // Pre-allocate with ~2.5x input size (encrypted output is typically 2-3x larger)
         let mut output = Vec::with_capacity(data.len() * 5 / 2);
         let mut i = 0;
 
-        self.walk_value(&data, &mut i, &mut output, false)?;
+        self.walk_value(data, &mut i, &mut output, false)?;
 
         // Append any trailing whitespace/content
         while i < data.len() {
@@ -492,22 +487,32 @@ fn transform_json_keys(value: Value) -> Value {
 /// JSON doesn't handle multiline literals, so we convert embedded newlines
 /// in string literals to escape sequences.
 pub fn collapse_multiline_string_literals(data: &[u8]) -> Result<Vec<u8>, JsonError> {
-    let mut result = Vec::with_capacity(data.len());
+    Ok(collapse_multiline(data).unwrap_or_else(|| data.to_vec()))
+}
+
+/// Like [`collapse_multiline_string_literals`], but returns `None` when no
+/// string contains a raw newline, so callers needn't copy a document that is
+/// already valid (the common case, and always true after `preprocess`).
+fn collapse_multiline(data: &[u8]) -> Option<Vec<u8>> {
+    // Allocated on the first newline found inside a string.
+    let mut result: Option<Vec<u8>> = None;
     let mut in_string = false;
     let mut escaped = false;
 
-    for &c in data {
-        if in_string {
-            if c == b'\n' {
-                result.extend_from_slice(b"\\n");
-                continue;
-            } else if c == b'\r' {
-                result.extend_from_slice(b"\\r");
-                continue;
-            }
+    for (i, &c) in data.iter().enumerate() {
+        if in_string && (c == b'\n' || c == b'\r') {
+            let out = result.get_or_insert_with(|| {
+                let mut out = Vec::with_capacity(data.len() + 16);
+                out.extend_from_slice(&data[..i]);
+                out
+            });
+            out.extend_from_slice(if c == b'\n' { b"\\n" } else { b"\\r" });
+            continue;
         }
 
-        result.push(c);
+        if let Some(out) = result.as_mut() {
+            out.push(c);
+        }
 
         if in_string {
             if escaped {
@@ -523,7 +528,7 @@ pub fn collapse_multiline_string_literals(data: &[u8]) -> Result<Vec<u8>, JsonEr
         }
     }
 
-    Ok(result)
+    result
 }
 
 // ============================================================================
@@ -714,6 +719,71 @@ mod tests {
                 matches!(walker.walk(bad), Err(JsonError::InvalidJson)),
                 "expected InvalidJson for {}",
                 String::from_utf8_lossy(bad)
+            );
+        }
+    }
+
+    /// The straightforward always-copy implementation `collapse_multiline`
+    /// replaced; kept as the reference for its behaviour.
+    fn collapse_reference(data: &[u8]) -> Vec<u8> {
+        let mut result = Vec::new();
+        let (mut in_string, mut escaped) = (false, false);
+        for &c in data {
+            if in_string && c == b'\n' {
+                result.extend_from_slice(b"\\n");
+                continue;
+            }
+            if in_string && c == b'\r' {
+                result.extend_from_slice(b"\\r");
+                continue;
+            }
+            result.push(c);
+            if in_string {
+                if escaped {
+                    escaped = false;
+                } else if c == b'\\' {
+                    escaped = true;
+                } else if c == b'"' {
+                    in_string = false;
+                }
+            } else if c == b'"' {
+                in_string = true;
+                escaped = false;
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn test_collapse_multiline_only_copies_when_needed() {
+        // Newlines between tokens, escaped quotes and escaped newlines need no change.
+        for unchanged in [
+            "{\n  \"a\": \"b\",\r\n  \"c\": \"d\"\n}\n",
+            r#"{"a": "quote \" and \\", "b": "x\ny"}"#,
+            "",
+            "\"unterminated",
+        ] {
+            assert_eq!(
+                collapse_multiline(unchanged.as_bytes()),
+                None,
+                "{unchanged:?}"
+            );
+        }
+
+        for changed in [
+            "{\"a\": \"line1\nline2\"}",
+            "{\"a\": \"crlf\r\nend\", \"b\": \"x\"}\n",
+            "{\n \"a\": \"esc \\\" still in\nstring\",\n \"b\": \"\n\"}",
+            "\"unterminated\n",
+        ] {
+            assert_eq!(
+                collapse_multiline(changed.as_bytes()),
+                Some(collapse_reference(changed.as_bytes())),
+                "{changed:?}"
+            );
+            assert_eq!(
+                collapse_multiline_string_literals(changed.as_bytes()).unwrap(),
+                collapse_reference(changed.as_bytes())
             );
         }
     }

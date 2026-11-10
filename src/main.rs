@@ -9,7 +9,7 @@ use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use ejson::env::{
     ExportFunction, export_env, export_env_auto, export_env_fish, export_quiet, export_quiet_auto,
     export_quiet_fish, read_and_export_env,
@@ -37,19 +37,26 @@ struct Cli {
     command: Commands,
 }
 
+/// The `--keydir` option, shared by every command that reads or writes keys.
+#[derive(Args)]
+struct KeydirArgs {
+    /// Directory containing EJSON keys
+    #[arg(
+        short = 'k',
+        long = "keydir",
+        default_value = "/opt/ejson/keys",
+        env = "EJSON_KEYDIR"
+    )]
+    keydir: String,
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Generate a new EJSON keypair
     #[command(alias = "g")]
     Keygen {
-        /// Directory containing EJSON keys
-        #[arg(
-            short = 'k',
-            long = "keydir",
-            default_value = "/opt/ejson/keys",
-            env = "EJSON_KEYDIR"
-        )]
-        keydir: String,
+        #[command(flatten)]
+        keydir: KeydirArgs,
 
         /// Write private key to keydir, print only public key
         #[arg(short = 'w', long = "write")]
@@ -75,14 +82,8 @@ enum Commands {
     /// Decrypt an EJSON/ETOML/EYAML file
     #[command(alias = "d")]
     Decrypt {
-        /// Directory containing EJSON keys
-        #[arg(
-            short = 'k',
-            long = "keydir",
-            default_value = "/opt/ejson/keys",
-            env = "EJSON_KEYDIR"
-        )]
-        keydir: String,
+        #[command(flatten)]
+        keydir: KeydirArgs,
 
         /// File to decrypt (format detected by extension: .ejson/.json, .etoml/.toml, or .eyaml/.eyml/.yaml/.yml)
         file: PathBuf,
@@ -102,14 +103,8 @@ enum Commands {
 
     /// Export environment variables from the 'environment' key in an EJSON/ETOML/EYAML file
     Env {
-        /// Directory containing EJSON keys
-        #[arg(
-            short = 'k',
-            long = "keydir",
-            default_value = "/opt/ejson/keys",
-            env = "EJSON_KEYDIR"
-        )]
-        keydir: String,
+        #[command(flatten)]
+        keydir: KeydirArgs,
 
         /// File to read (format detected by extension: .ejson/.json, .etoml/.toml, or .eyaml/.eyml/.yaml/.yml)
         file: PathBuf,
@@ -149,7 +144,7 @@ fn main() {
             pqc,
         } => {
             let scheme = if pqc { "v2".to_string() } else { scheme };
-            keygen_action(&keydir, write, &scheme)
+            keygen_action(&keydir.keydir, write, &scheme)
         }
         Commands::Encrypt { files } => encrypt_action(&files),
         Commands::Decrypt {
@@ -160,7 +155,7 @@ fn main() {
             trim_underscore_prefix,
         } => decrypt_action(
             &file,
-            &keydir,
+            &keydir.keydir,
             output.as_deref(),
             key_from_stdin,
             trim_underscore_prefix,
@@ -174,7 +169,7 @@ fn main() {
             trim_underscore_prefix,
         } => env_action(
             &file,
-            &keydir,
+            &keydir.keydir,
             key_from_stdin,
             quiet,
             shell,
@@ -313,12 +308,7 @@ fn decrypt_action(
     key_from_stdin: bool,
     trim_underscore_prefix: bool,
 ) -> Result<(), String> {
-    // Use Zeroizing wrapper for private key to ensure it's cleared from memory
-    let user_supplied_private_key: Zeroizing<String> = if key_from_stdin {
-        read_key_from_stdin()?
-    } else {
-        Zeroizing::new(String::new())
-    };
+    let user_supplied_private_key = user_supplied_private_key(key_from_stdin)?;
 
     let decrypted = Zeroizing::new(
         ejson::decrypt_file(
@@ -342,6 +332,17 @@ fn decrypt_action(
     }
 
     Ok(())
+}
+
+/// The private key to pass to the library: read from stdin with
+/// `--key-from-stdin`, otherwise empty, which makes the library look the key up
+/// in the keydir. Held in `Zeroizing` so it is wiped from memory on drop.
+fn user_supplied_private_key(key_from_stdin: bool) -> Result<Zeroizing<String>, String> {
+    if key_from_stdin {
+        read_key_from_stdin()
+    } else {
+        Ok(Zeroizing::new(String::new()))
+    }
 }
 
 /// Read a private key from stdin, refusing input larger than any real key.
@@ -368,12 +369,7 @@ fn env_action(
     shell: ShellArg,
     trim_underscore_prefix: bool,
 ) -> Result<(), String> {
-    // Use Zeroizing wrapper for private key to ensure it's cleared from memory
-    let user_supplied_private_key: Zeroizing<String> = if key_from_stdin {
-        read_key_from_stdin()?
-    } else {
-        Zeroizing::new(String::new())
-    };
+    let user_supplied_private_key = user_supplied_private_key(key_from_stdin)?;
 
     // Select the export function based on flags
     let export_func: ExportFunction = match (shell, quiet) {

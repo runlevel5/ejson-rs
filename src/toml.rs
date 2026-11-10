@@ -8,7 +8,9 @@
 
 use std::ops::Range;
 
-use crate::handler::{FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, WalkAction};
+use crate::handler::{
+    FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, WalkAction, decode_legacy_public_key,
+};
 use thiserror::Error;
 use toml_edit::{DocumentMut, Item, Value};
 
@@ -84,16 +86,7 @@ pub fn extract_public_key_string(data: &[u8]) -> Result<String, TomlError> {
 /// Extract the _public_key value from an ETOML document as a legacy 32-byte key.
 pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], TomlError> {
     let key_str = extract_public_key_string(data)?;
-
-    if key_str.len() != KEY_SIZE * 2 {
-        return Err(TomlError::PublicKeyInvalid);
-    }
-
-    let key_bytes = hex::decode(&key_str).map_err(|_| TomlError::PublicKeyInvalid)?;
-
-    key_bytes
-        .try_into()
-        .map_err(|_| TomlError::PublicKeyInvalid)
+    decode_legacy_public_key(&key_str).ok_or(TomlError::PublicKeyInvalid)
 }
 
 /// Walker walks a TOML structure, applying an action to encryptable string values.
