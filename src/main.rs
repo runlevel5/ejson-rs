@@ -137,10 +137,9 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
 
-    // Every command except `encrypt` handles private keys or plaintext.
-    if !matches!(cli.command, Commands::Encrypt { .. }) {
-        disable_core_dumps();
-    }
+    // Every command handles secrets: private keys (keygen, decrypt, env) or
+    // plaintext about to be encrypted (encrypt).
+    disable_core_dumps();
 
     let result = match cli.command {
         Commands::Keygen {
