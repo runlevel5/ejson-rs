@@ -307,7 +307,7 @@ fn export(
 
         let (filtered, had_control_chars) = filtered_value(v);
         if had_control_chars {
-            eprintln!("ejson env trimmed control characters from value");
+            log::warn!("trimmed control characters from the value of {k}");
         }
 
         let quoted = shell_quote(&filtered);
@@ -882,6 +882,26 @@ mod tests {
             export_env(&mut FailingWriter, &values),
             Err(EnvError::Write(_))
         ));
+    }
+
+    #[test]
+    fn test_trimmed_control_characters_are_reported_through_log() {
+        crate::test_log::install();
+
+        let mut values = SecretEnvMap::new();
+        values.insert("CTRL_CHAR_PROBE".to_string(), "se\x07cret".to_string());
+        values.insert("CLEAN_PROBE".to_string(), "secret".to_string());
+        let mut output = Vec::new();
+        export_env(&mut output, &values).unwrap();
+
+        let warnings = crate::test_log::messages_containing("CTRL_CHAR_PROBE");
+        assert_eq!(
+            warnings,
+            ["WARN: trimmed control characters from the value of CTRL_CHAR_PROBE"]
+        );
+        // The message names the variable, never its value.
+        assert!(crate::test_log::messages_containing("secret").is_empty());
+        assert!(crate::test_log::messages_containing("CLEAN_PROBE").is_empty());
     }
 
     #[test]

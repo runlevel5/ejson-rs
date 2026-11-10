@@ -375,6 +375,7 @@ dependencies = [
  "crypto_box",
  "hex",
  "hkdf",
+ "log",
  "ml-kem",
  "rustix",
  "serde",

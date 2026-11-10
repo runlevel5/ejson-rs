@@ -46,6 +46,9 @@ hex = "0.4"
 # Error handling
 thiserror = "2.0"
 
+# Warnings from the library (the CLI prints them to stderr)
+log = "0.4"
+
 [target.'cfg(unix)'.dependencies]
 # Process hardening (disable core dumps)
 rustix = { version = "1.1", features = ["process"] }
