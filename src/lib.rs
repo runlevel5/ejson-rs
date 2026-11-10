@@ -121,7 +121,7 @@ pub enum EjsonError {
 )]
 pub fn generate_keypair() -> Result<(String, String), EjsonError> {
     let kp = Keypair::generate()?;
-    Ok((kp.public_string(), kp.private_string()))
+    Ok((kp.public_string(), kp.private_hex().to_string()))
 }
 
 /// Generate a new ejson keypair for the named scheme (`v1` or `v2`, plus aliases).
@@ -868,7 +868,7 @@ mod tests {
         // Generate a keypair
         let kp = Keypair::generate().unwrap();
         let pub_hex = kp.public_string();
-        let priv_hex = kp.private_string();
+        let priv_hex = kp.private_hex().to_string();
 
         // Create a temporary keydir
         let temp_dir = TempDir::new().unwrap();
@@ -908,7 +908,7 @@ mod tests {
         // Generate a keypair
         let kp = Keypair::generate().unwrap();
         let pub_hex = kp.public_string();
-        let priv_hex = kp.private_string();
+        let priv_hex = kp.private_hex().to_string();
 
         // Create a temporary keydir
         let temp_dir = TempDir::new().unwrap();
@@ -985,7 +985,7 @@ secret = "my secret"
         // Generate a keypair
         let kp = Keypair::generate().unwrap();
         let pub_hex = kp.public_string();
-        let priv_hex = kp.private_string();
+        let priv_hex = kp.private_hex().to_string();
 
         // Create a temporary keydir
         let temp_dir = TempDir::new().unwrap();
@@ -1060,7 +1060,7 @@ secret: "my secret"
     fn write_ejson_fixture(dir: &Path) -> (std::path::PathBuf, String) {
         let kp = Keypair::generate().unwrap();
         let pub_hex = kp.public_string();
-        fs::write(dir.join(&pub_hex), kp.private_string()).unwrap();
+        fs::write(dir.join(&pub_hex), kp.private_hex()).unwrap();
         let path = dir.join("secrets.ejson");
         fs::write(
             &path,
@@ -1330,7 +1330,7 @@ secret: "my secret"
         // Generate a keypair
         let kp = Keypair::generate().unwrap();
         let pub_hex = kp.public_string();
-        let priv_hex = kp.private_string();
+        let priv_hex = kp.private_hex().to_string();
 
         // Create a temporary keydir
         let temp_dir = TempDir::new().unwrap();
@@ -1372,7 +1372,7 @@ secret: "my secret"
         // Generate a keypair
         let kp = Keypair::generate().unwrap();
         let pub_hex = kp.public_string();
-        let priv_hex = kp.private_string();
+        let priv_hex = kp.private_hex().to_string();
 
         // Create a temporary keydir
         let temp_dir = TempDir::new().unwrap();
@@ -1420,7 +1420,7 @@ BAZ = "qux"
         // Generate a keypair
         let kp = Keypair::generate().unwrap();
         let pub_hex = kp.public_string();
-        let priv_hex = kp.private_string();
+        let priv_hex = kp.private_hex().to_string();
 
         // Create a temporary keydir
         let temp_dir = TempDir::new().unwrap();
@@ -1468,7 +1468,7 @@ environment:
         // This test demonstrates the simplified ejson2env pattern
         let kp = Keypair::generate().unwrap();
         let pub_hex = kp.public_string();
-        let priv_hex = kp.private_string();
+        let priv_hex = kp.private_hex().to_string();
 
         let temp_dir = TempDir::new().unwrap();
         let keydir = temp_dir.path().to_str().unwrap();
@@ -1509,7 +1509,7 @@ environment:
         // Generate a keypair
         let kp = Keypair::generate().unwrap();
         let pub_hex = kp.public_string();
-        let priv_hex = kp.private_string();
+        let priv_hex = kp.private_hex().to_string();
 
         // Create a temporary keydir
         let temp_dir = TempDir::new().unwrap();
@@ -1550,7 +1550,7 @@ environment:
         // Generate a keypair
         let kp = Keypair::generate().unwrap();
         let pub_hex = kp.public_string();
-        let priv_hex = kp.private_string();
+        let priv_hex = kp.private_hex().to_string();
 
         // Create a temporary keydir
         let temp_dir = TempDir::new().unwrap();
@@ -1587,7 +1587,7 @@ BAZ = "qux"
         // Generate a keypair
         let kp = Keypair::generate().unwrap();
         let pub_hex = kp.public_string();
-        let priv_hex = kp.private_string();
+        let priv_hex = kp.private_hex().to_string();
 
         // Create a temporary keydir
         let temp_dir = TempDir::new().unwrap();
@@ -1624,7 +1624,7 @@ environment:
         // Generate a keypair
         let kp = Keypair::generate().unwrap();
         let pub_hex = kp.public_string();
-        let priv_hex = kp.private_string();
+        let priv_hex = kp.private_hex().to_string();
 
         // Create a temporary keydir
         let temp_dir = TempDir::new().unwrap();

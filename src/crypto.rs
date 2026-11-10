@@ -4,6 +4,10 @@
 //! It models a situation where you don't care about authenticating the encryptor,
 //! so the nonce and encryption public key are prepended to the encrypted message.
 
+// This module owns the deprecated-for-external-use secret fields below; its
+// own accesses are intended.
+#![allow(deprecated)]
+
 use crypto_box::{
     PublicKey, SalsaBox, SecretKey,
     aead::{Aead, AeadCore, OsRng},
@@ -12,7 +16,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt;
 use thiserror::Error;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::boxed_message::{BoxedMessage, is_boxed_message};
 
@@ -52,6 +56,11 @@ pub enum CryptoError {
 pub struct Keypair {
     #[zeroize(skip)] // Public key doesn't need zeroizing
     pub public: KeyBytes,
+    #[deprecated(
+        since = "1.1.0",
+        note = "reading this field copies the private key out of the zeroizing \
+                `Keypair`; it will become private in 2.0. Use `private_hex()`"
+    )]
     pub private: KeyBytes,
 }
 
@@ -91,8 +100,19 @@ impl Keypair {
     ///
     /// Security: The returned string should be wrapped in `Zeroizing<String>` by the caller
     /// if it will be stored.
+    #[deprecated(
+        since = "1.1.0",
+        note = "returns the private key in a plain `String` that is never wiped; \
+                use `private_hex()`"
+    )]
     pub fn private_string(&self) -> String {
         hex::encode(self.private)
+    }
+
+    /// Returns the private key as a hex-encoded string that is wiped from
+    /// memory when dropped.
+    pub fn private_hex(&self) -> Zeroizing<String> {
+        Zeroizing::new(hex::encode(self.private))
     }
 
     /// Create an Encrypter for encrypting messages to a peer's public key.
@@ -268,7 +288,7 @@ mod tests {
         assert_eq!(kp.public.len(), 32);
         assert_eq!(kp.private.len(), 32);
         assert_eq!(kp.public_string().len(), 64);
-        assert_eq!(kp.private_string().len(), 64);
+        assert_eq!(kp.private_hex().len(), 64);
     }
 
     #[test]
@@ -306,6 +326,6 @@ mod tests {
         let kp = Keypair::generate().unwrap();
         let debug_output = format!("{:?}", kp);
         assert!(debug_output.contains("[REDACTED]"));
-        assert!(!debug_output.contains(&kp.private_string()));
+        assert!(!debug_output.contains(kp.private_hex().as_str()));
     }
 }
