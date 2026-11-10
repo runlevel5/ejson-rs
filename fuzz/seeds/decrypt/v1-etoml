@@ -1,0 +1,6 @@
+_public_key = "PUBKEY"
+pw = "EJ[1:ePsQpsVp+msyr9iY5TIGl5V4paJgFyffYwyPG9Y5Ew0=:7oQfSdD7Wffia1tPqg/NbKRWKsn/S6IN:9MTRUDJZ03D7+vraA038iYQrTM4gybU=]"
+[t]
+a = ["EJ[1:ePsQpsVp+msyr9iY5TIGl5V4paJgFyffYwyPG9Y5Ew0=:ijnfxbxv5PORD5hDHQwLt4Mfx9w82YXB:8H/DO8iO30DqDuoLgN6QBA0=]", 1]
+[[aot]]
+k = "EJ[1:ePsQpsVp+msyr9iY5TIGl5V4paJgFyffYwyPG9Y5Ew0=:eQQ/qNpvKfNX+3nqv0yE38eyjw4kLbv5:RA10eXcngky6yGGYNdTlDDc=]"

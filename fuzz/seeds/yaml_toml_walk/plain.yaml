@@ -1,0 +1,12 @@
+_public_key: x
+pw: hunter2
+n: 12
+list: [a, 1, {k: v}]
+t: !secret v
+nested: !m
+  _c: x
+  d: "q\u00e9"
+? [complex]
+: v
+anchor: &a val
+ref: *a

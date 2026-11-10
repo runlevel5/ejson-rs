@@ -1,0 +1,11 @@
+_public_key = "x"
+pw = "hunter2"
+ml = """
+line
+"""
+lit = 'C:\\path'
+inline = { a = "b", _c = "d", n = [1, "x"] }
+[t]
+"quoted key" = "v"
+[[aot]]
+k = "v"
