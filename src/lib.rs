@@ -24,6 +24,13 @@
 //! - Input files are limited to [`MAX_FILE_SIZE`] and keys to
 //!   [`MAX_KEY_FILE_SIZE`], enforced while reading
 //!
+//! # Warnings
+//!
+//! The library never writes to stdout or stderr. Non-fatal problems, such as
+//! a private key file that other users can read, are reported through the
+//! [`log`] crate at `warn` level; install a logger to see them. The `ejson`
+//! command-line tool prints them to stderr.
+//!
 //! Ciphertext authentication (Poly1305) is verified by the RustCrypto
 //! implementations, which compare tags in constant time. ejson itself does no
 //! other secret-dependent comparisons.
@@ -806,8 +813,8 @@ fn read_private_key_from_disk(
     {
         use std::os::unix::fs::PermissionsExt;
         if let Some(problem) = key_file_mode_problem(metadata.permissions().mode()) {
-            eprintln!(
-                "ejson: warning: key file for public key {prefix}... is {problem}; \
+            log::warn!(
+                "key file for public key {prefix}... is {problem}; \
                  restrict it with `chmod 440` (or `chmod 400`)"
             );
         }
@@ -832,10 +839,79 @@ fn key_file_mode_problem(mode: u32) -> Option<&'static str> {
     }
 }
 
+/// Captures `log` records so tests can assert on the library's warnings.
+#[cfg(test)]
+pub(crate) mod test_log {
+    use std::sync::{Mutex, Once};
+
+    static MESSAGES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    struct Capture;
+
+    impl log::Log for Capture {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn log(&self, record: &log::Record<'_>) {
+            let message = format!("{}: {}", record.level(), record.args());
+            MESSAGES.lock().unwrap().push(message);
+        }
+
+        fn flush(&self) {}
+    }
+
+    /// Install the capturing logger (once per test process).
+    pub(crate) fn install() {
+        static INSTALL: Once = Once::new();
+        INSTALL.call_once(|| {
+            log::set_logger(&Capture).expect("no other logger in tests");
+            log::set_max_level(log::LevelFilter::Trace);
+        });
+    }
+
+    /// Captured messages containing `needle`. Tests run in parallel and share
+    /// the log, so each test filters on something unique to it.
+    pub(crate) fn messages_containing(needle: &str) -> Vec<String> {
+        MESSAGES
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|m| m.contains(needle))
+            .cloned()
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    #[cfg(unix)]
+    fn test_exposed_key_file_is_reported_through_log() {
+        use std::os::unix::fs::PermissionsExt;
+        test_log::install();
+
+        let keydir = TempDir::new().unwrap();
+        let exposed = keys::PublicKey::Legacy([0xcd; 32]);
+        let restricted = keys::PublicKey::Legacy([0xce; 32]);
+        for (key, mode) in [(&exposed, 0o644), (&restricted, 0o440)] {
+            let path = keydir.path().join(key.key_id());
+            fs::write(&path, "00").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+            read_private_key_from_disk(key, keydir.path().to_str().unwrap()).unwrap();
+        }
+
+        let warnings = test_log::messages_containing("cdcdcdcd");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].starts_with("WARN: key file for public key cdcdcdcd..."));
+        assert!(warnings[0].contains("accessible by other users"));
+
+        // A correctly restricted key produces no warning.
+        assert!(test_log::messages_containing("cececece").is_empty());
+    }
 
     #[test]
     #[cfg(unix)]
