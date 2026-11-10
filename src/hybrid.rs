@@ -594,6 +594,16 @@ mod tests {
         generate_hybrid_keypair().unwrap()
     }
 
+    /// Compile-time check that the long-lived decryption secrets wipe
+    /// themselves. This fails to build if the `zeroize` feature of `ml-kem`
+    /// or `x25519-dalek` is ever dropped from Cargo.toml.
+    #[test]
+    fn test_decrypter_secrets_zeroize_on_drop() {
+        fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+        assert_zeroize_on_drop::<DecapsulationKey<MlKem768>>();
+        assert_zeroize_on_drop::<StaticSecret>();
+    }
+
     #[test]
     fn test_keypair_generation_and_parsing() {
         let (pubk, privk) = keypair();
