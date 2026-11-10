@@ -302,7 +302,7 @@ fn export(
     for (k, v) in values {
         // Validate key is a valid shell identifier
         if !is_valid_identifier(k) {
-            return Err(EnvError::InvalidIdentifier(k.to_string()));
+            return Err(EnvError::InvalidIdentifier(k.clone()));
         }
 
         let (filtered, had_control_chars) = filtered_value(v);
@@ -314,11 +314,11 @@ fn export(
         match shell {
             Shell::Posix => {
                 let prefix = if exported { "export " } else { "" };
-                writeln!(w, "{}{}={}", prefix, k, quoted)
+                writeln!(w, "{prefix}{k}={quoted}")
             }
             Shell::Fish => {
                 let flag = if exported { "-gx" } else { "-g" };
-                writeln!(w, "set {} {} {}", flag, k, quoted)
+                writeln!(w, "set {flag} {k} {quoted}")
             }
         }
         .map_err(EnvError::Write)?;
@@ -681,7 +681,7 @@ mod tests {
         secrets.insert("API_KEY".to_string(), "super_secret_key_123".to_string());
         secrets.insert("DB_PASSWORD".to_string(), "password123".to_string());
 
-        let debug_output = format!("{:?}", secrets);
+        let debug_output = format!("{secrets:?}");
 
         // Should show keys but not values
         assert!(debug_output.contains("API_KEY"));

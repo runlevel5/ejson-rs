@@ -4,6 +4,9 @@
 //! actually gets: exit codes, what goes to stdout versus stderr, flags,
 //! aliases and environment variables.
 
+// Test helpers panic on failure by design.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};

@@ -103,6 +103,16 @@ where
     action: F,
 }
 
+// The action is a closure, which has no useful `Debug` output.
+impl<F> std::fmt::Debug for Walker<F>
+where
+    F: Fn(&[u8]) -> Result<Vec<u8>, String>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Walker").finish_non_exhaustive()
+    }
+}
+
 impl<F> Walker<F>
 where
     F: Fn(&[u8]) -> Result<Vec<u8>, String>,
@@ -437,10 +447,10 @@ inner = "should_encrypt"
 
     #[test]
     fn test_walker_non_string_values() {
-        let toml = br#"port = 8080
+        let toml = br"port = 8080
 enabled = true
 ratio = 1.5
-"#;
+";
         let walker =
             Walker::new(|data| Ok(format!("E:{}", String::from_utf8_lossy(data)).into_bytes()));
 

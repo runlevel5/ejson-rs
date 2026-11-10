@@ -3,6 +3,8 @@
 //! Supports JSON (.ejson, .json), TOML (.etoml, .toml), and YAML (.eyaml, .eyml, .yaml, .yml) file formats.
 
 #![forbid(unsafe_code)]
+// Printing to the terminal is this binary's job; the lint is for the library.
+#![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use std::fs;
 use std::io::{self, BufWriter, Read, Write};
@@ -205,7 +207,7 @@ fn main() {
     };
 
     if let Err(e) = result {
-        eprintln!("{}", e);
+        eprintln!("{e}");
         process::exit(1);
     }
 }
@@ -518,8 +520,7 @@ mod tests {
 
         assert_eq!(
             mode, 0o600,
-            "Decrypted output file should have 0o600 permissions, got 0o{:o}",
-            mode
+            "Decrypted output file should have 0o600 permissions, got 0o{mode:o}"
         );
 
         // Verify the content was actually decrypted
@@ -551,8 +552,7 @@ mod tests {
 
         assert_eq!(
             mode, 0o440,
-            "Key file should have 0o440 permissions, got 0o{:o}",
-            mode
+            "Key file should have 0o440 permissions, got 0o{mode:o}"
         );
     }
 

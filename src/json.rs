@@ -115,6 +115,16 @@ where
     action: F,
 }
 
+// The action is a closure, which has no useful `Debug` output.
+impl<F> fmt::Debug for Walker<F>
+where
+    F: Fn(&[u8]) -> Result<Vec<u8>, String>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Walker").finish_non_exhaustive()
+    }
+}
+
 impl<F> Walker<F>
 where
     F: Fn(&[u8]) -> Result<Vec<u8>, String>,
@@ -355,7 +365,7 @@ fn escape_json_bytes_to(s: &[u8], output: &mut Vec<u8>) {
             b'\t' => output.extend_from_slice(b"\\t"),
             c if c < 0x20 => {
                 // Control characters
-                output.extend_from_slice(format!("\\u{:04x}", c).as_bytes());
+                output.extend_from_slice(format!("\\u{c:04x}").as_bytes());
             }
             c => output.push(c),
         }
