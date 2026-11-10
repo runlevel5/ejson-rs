@@ -16,6 +16,7 @@ use toml_edit::{DocumentMut, Item, Value};
 
 /// Errors that can occur during TOML processing.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum TomlError {
     #[error("public key not present in ETOML file")]
     PublicKeyMissing,

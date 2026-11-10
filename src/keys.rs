@@ -197,9 +197,9 @@ impl AnyDecrypter {
             }
             (_, PrivateKey::Legacy(mut privk)) => {
                 privk.zeroize();
-                Err(CryptoError::DecryptionFailed)
+                Err(CryptoError::KeyMismatch)
             }
-            _ => Err(CryptoError::DecryptionFailed),
+            _ => Err(CryptoError::KeyMismatch),
         }
     }
 
@@ -240,17 +240,17 @@ pub fn generate_keypair_for_scheme(
 }
 
 fn parse_legacy_public_key(s: &str) -> Result<KeyBytes, CryptoError> {
-    crate::handler::decode_legacy_public_key(s).ok_or(CryptoError::InvalidKeyLength)
+    crate::handler::decode_legacy_public_key(s).ok_or(CryptoError::InvalidPublicKey)
 }
 
 fn parse_legacy_private_key(data: &str) -> Result<KeyBytes, CryptoError> {
     // `Zeroizing` wipes the decoded copy on return.
     let bytes =
-        Zeroizing::new(hex::decode(data.trim()).map_err(|_| CryptoError::InvalidKeyLength)?);
+        Zeroizing::new(hex::decode(data.trim()).map_err(|_| CryptoError::InvalidPrivateKey)?);
     bytes
         .as_slice()
         .try_into()
-        .map_err(|_| CryptoError::InvalidKeyLength)
+        .map_err(|_| CryptoError::InvalidPrivateKey)
 }
 
 #[cfg(test)]
@@ -325,6 +325,60 @@ mod tests {
             assert!(outputs[1].contains("[REDACTED]"));
             assert!(outputs[3].contains(&key_id));
         }
+    }
+
+    #[test]
+    fn test_key_errors_say_what_is_wrong() {
+        // Malformed public keys
+        for bad in ["", "abc", "zz", "v2:", "v2:not-base64!", "v2:AAAA"] {
+            assert!(
+                matches!(PublicKey::parse(bad), Err(CryptoError::InvalidPublicKey)),
+                "{bad:?}"
+            );
+        }
+
+        for scheme in ["v1", "v2"] {
+            let (public, private, _) = generate_keypair_for_scheme(scheme).unwrap();
+            let pk = PublicKey::parse(&public).unwrap();
+
+            // Malformed private keys
+            for bad in ["", "not-a-key", "abcd", "ejson-key v2\nkeyid: x\n"] {
+                assert!(
+                    matches!(
+                        PrivateKey::parse_for_public(&pk, bad),
+                        Err(CryptoError::InvalidPrivateKey)
+                    ),
+                    "{scheme}: {bad:?}"
+                );
+            }
+
+            // A valid private key of the other scheme is malformed for this one.
+            let other_scheme = if scheme == "v1" { "v2" } else { "v1" };
+            let (other_public, other_private, _) =
+                generate_keypair_for_scheme(other_scheme).unwrap();
+            assert!(matches!(
+                PrivateKey::parse_for_public(&pk, &other_private),
+                Err(CryptoError::InvalidPrivateKey)
+            ));
+
+            // Handing a decrypter keys of two different schemes is a mismatch.
+            let other_pk = PublicKey::parse(&other_public).unwrap();
+            let privk = PrivateKey::parse_for_public(&pk, &private).unwrap();
+            assert!(matches!(
+                AnyDecrypter::new(&other_pk, privk),
+                Err(CryptoError::KeyMismatch)
+            ));
+        }
+
+        // A well-formed v2 key for a different v2 public key is a mismatch,
+        // detected when the key is loaded.
+        let (public, _, _) = generate_keypair_for_scheme("v2").unwrap();
+        let (_, other_private, _) = generate_keypair_for_scheme("v2").unwrap();
+        let pk = PublicKey::parse(&public).unwrap();
+        assert!(matches!(
+            PrivateKey::parse_for_public(&pk, &other_private),
+            Err(CryptoError::KeyMismatch)
+        ));
     }
 
     #[test]

@@ -19,6 +19,7 @@ use zeroize::Zeroizing;
 
 /// Errors that can occur during JSON processing.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum JsonError {
     #[error("public key not present in EJSON file")]
     PublicKeyMissing,

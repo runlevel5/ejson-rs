@@ -72,6 +72,7 @@ fn is_base64_nonempty(s: &str) -> bool {
 
 /// Errors that can occur when parsing boxed messages.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum BoxedMessageError {
     #[error("invalid message format")]
     InvalidFormat,

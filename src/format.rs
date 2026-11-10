@@ -15,6 +15,7 @@ use crate::yaml::YamlHandler;
 
 /// Errors that can occur during file format detection.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum FileFormatError {
     #[error("unsupported file extension: {0}")]
     UnsupportedFileExtension(String),

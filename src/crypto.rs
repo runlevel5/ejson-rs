@@ -28,6 +28,7 @@ pub type KeyBytes = [u8; KEY_SIZE];
 
 /// Errors that can occur during cryptographic operations.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum CryptoError {
     #[error("couldn't decrypt message")]
     DecryptionFailed,
@@ -35,11 +36,17 @@ pub enum CryptoError {
     #[error("encryption failed")]
     EncryptionFailed,
 
-    #[error("failed to generate random bytes")]
-    RandomGenerationFailed,
+    /// A public key (a document's `_public_key`) is malformed.
+    #[error("invalid public key")]
+    InvalidPublicKey,
 
-    #[error("invalid key length")]
-    InvalidKeyLength,
+    /// Private key material is malformed.
+    #[error("invalid private key")]
+    InvalidPrivateKey,
+
+    /// A well-formed private key that belongs to a different public key.
+    #[error("private key does not match the public key")]
+    KeyMismatch,
 
     #[error("invalid message format")]
     InvalidMessageFormat,

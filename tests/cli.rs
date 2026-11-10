@@ -487,6 +487,16 @@ fn decrypt_errors() {
     assert_fails_with(&output, "couldn't decrypt message");
     assert!(output.stdout.is_empty());
 
+    // A v2 key for a different v2 public key is caught when the key is loaded.
+    let v2 = Fixture::new("v2");
+    let v2_path = v2.write_encrypted("secrets.ejson", JSON_DOC);
+    let output = run_with_stdin(
+        v2.decrypt(&v2_path).arg("--key-from-stdin"),
+        &Fixture::new("v2").private_key(),
+    );
+    assert_fails_with(&output, "private key does not match the public key");
+    assert!(output.stdout.is_empty());
+
     // Malformed key on stdin.
     let output = run_with_stdin(fx.decrypt(&path).arg("--key-from-stdin"), "not-a-key");
     assert_fails_with(&output, "invalid private key");

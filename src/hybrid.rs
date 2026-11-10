@@ -113,14 +113,14 @@ impl HybridPublicKey {
     /// Validate and construct a hybrid public key from raw `x25519 ‖ mlkem_ek` bytes.
     pub fn from_payload(payload: &[u8]) -> Result<Self, CryptoError> {
         if payload.len() != HYBRID_PUBLIC_KEY_PAYLOAD_SIZE {
-            return Err(CryptoError::InvalidKeyLength);
+            return Err(CryptoError::InvalidPublicKey);
         }
         let (x_bytes, ek_bytes) = payload.split_at(HYBRID_X25519_KEY_SIZE);
 
         // Validate the ML-KEM encapsulation key parses.
         let ek_arr: Array<u8, _> =
-            Array::try_from(ek_bytes).map_err(|_| CryptoError::InvalidKeyLength)?;
-        EncapsulationKey::<MlKem768>::new(&ek_arr).map_err(|_| CryptoError::InvalidKeyLength)?;
+            Array::try_from(ek_bytes).map_err(|_| CryptoError::InvalidPublicKey)?;
+        EncapsulationKey::<MlKem768>::new(&ek_arr).map_err(|_| CryptoError::InvalidPublicKey)?;
 
         let mut key = Self {
             x25519_public: [0u8; HYBRID_X25519_KEY_SIZE],
@@ -136,17 +136,17 @@ impl HybridPublicKey {
         let s = s.trim();
         let payload = s
             .strip_prefix(HYBRID_PUBLIC_KEY_PREFIX)
-            .ok_or(CryptoError::InvalidKeyLength)?;
+            .ok_or(CryptoError::InvalidPublicKey)?;
         let bytes = BASE64
             .decode(payload)
-            .map_err(|_| CryptoError::InvalidKeyLength)?;
+            .map_err(|_| CryptoError::InvalidPublicKey)?;
         Self::from_payload(&bytes)
     }
 
     fn encapsulation_key(&self) -> Result<EncapsulationKey<MlKem768>, CryptoError> {
         let ek_arr: Array<u8, _> =
-            Array::try_from(&self.mlkem_ek[..]).map_err(|_| CryptoError::InvalidKeyLength)?;
-        EncapsulationKey::<MlKem768>::new(&ek_arr).map_err(|_| CryptoError::InvalidKeyLength)
+            Array::try_from(&self.mlkem_ek[..]).map_err(|_| CryptoError::InvalidPublicKey)?;
+        EncapsulationKey::<MlKem768>::new(&ek_arr).map_err(|_| CryptoError::InvalidPublicKey)
     }
 
     fn x25519(&self) -> X25519Public {
@@ -220,54 +220,56 @@ impl HybridPrivateKey {
 
         // Reconstruct and validate the embedded public key.
         let pub_x_bytes =
-            hex::decode(&fields.pub_x25519).map_err(|_| CryptoError::InvalidKeyLength)?;
+            hex::decode(&fields.pub_x25519).map_err(|_| CryptoError::InvalidPrivateKey)?;
         let pub_mlkem_bytes = BASE64
             .decode(&fields.pub_mlkem768)
-            .map_err(|_| CryptoError::InvalidKeyLength)?;
+            .map_err(|_| CryptoError::InvalidPrivateKey)?;
         if pub_x_bytes.len() != HYBRID_X25519_KEY_SIZE
             || pub_mlkem_bytes.len() != HYBRID_MLKEM_PUBLIC_KEY_SIZE
         {
-            return Err(CryptoError::InvalidKeyLength);
+            return Err(CryptoError::InvalidPrivateKey);
         }
         let mut payload = Vec::with_capacity(HYBRID_PUBLIC_KEY_PAYLOAD_SIZE);
         payload.extend_from_slice(&pub_x_bytes);
         payload.extend_from_slice(&pub_mlkem_bytes);
-        let public = HybridPublicKey::from_payload(&payload)?;
+        // A bad embedded public key means the key file itself is malformed.
+        let public =
+            HybridPublicKey::from_payload(&payload).map_err(|_| CryptoError::InvalidPrivateKey)?;
 
         if fields.keyid != public.key_id()
             || public.to_document_string() != expected.to_document_string()
         {
-            return Err(CryptoError::DecryptionFailed);
+            return Err(CryptoError::KeyMismatch);
         }
 
         // Private X25519: must correspond to the public X25519.
         let priv_x_bytes = Zeroizing::new(
-            hex::decode(fields.priv_x25519.as_str()).map_err(|_| CryptoError::InvalidKeyLength)?,
+            hex::decode(fields.priv_x25519.as_str()).map_err(|_| CryptoError::InvalidPrivateKey)?,
         );
         if priv_x_bytes.len() != HYBRID_X25519_KEY_SIZE {
-            return Err(CryptoError::InvalidKeyLength);
+            return Err(CryptoError::InvalidPrivateKey);
         }
         // Held in `Zeroizing` so the mismatch returns below wipe it too.
         let mut x25519_private = Zeroizing::new([0u8; HYBRID_X25519_KEY_SIZE]);
         x25519_private.copy_from_slice(&priv_x_bytes);
         let derived_x_public = X25519Public::from(&StaticSecret::from(*x25519_private));
         if derived_x_public.as_bytes() != &public.x25519_public {
-            return Err(CryptoError::DecryptionFailed);
+            return Err(CryptoError::KeyMismatch);
         }
 
         // ML-KEM seed: must regenerate the public encapsulation key.
         let seed_bytes = Zeroizing::new(
             hex::decode(fields.priv_mlkem768_seed.as_str())
-                .map_err(|_| CryptoError::InvalidKeyLength)?,
+                .map_err(|_| CryptoError::InvalidPrivateKey)?,
         );
         if seed_bytes.len() != HYBRID_MLKEM_SEED_SIZE {
-            return Err(CryptoError::InvalidKeyLength);
+            return Err(CryptoError::InvalidPrivateKey);
         }
         let mut mlkem_seed = Zeroizing::new([0u8; HYBRID_MLKEM_SEED_SIZE]);
         mlkem_seed.copy_from_slice(&seed_bytes);
         let dk = DecapsulationKey::<MlKem768>::from_seed(Array::from(*mlkem_seed));
         if dk.encapsulation_key().to_bytes().as_slice() != public.mlkem_ek.as_slice() {
-            return Err(CryptoError::DecryptionFailed);
+            return Err(CryptoError::KeyMismatch);
         }
 
         Ok(Self {
@@ -587,7 +589,7 @@ fn parse_key_file_fields(data: &str) -> Result<KeyFileFields, CryptoError> {
     let mut lines = data.trim().lines();
     match lines.next() {
         Some(header) if header.trim() == HYBRID_KEY_FILE_HEADER => {}
-        _ => return Err(CryptoError::InvalidKeyLength),
+        _ => return Err(CryptoError::InvalidPrivateKey),
     }
 
     let mut keyid = String::new();
@@ -601,7 +603,7 @@ fn parse_key_file_fields(data: &str) -> Result<KeyFileFields, CryptoError> {
         if line.is_empty() {
             continue;
         }
-        let (name, value) = line.split_once(':').ok_or(CryptoError::InvalidKeyLength)?;
+        let (name, value) = line.split_once(':').ok_or(CryptoError::InvalidPrivateKey)?;
         let value = value.trim();
         // Private values are assigned as whole `Zeroizing`s so a duplicated field wipes
         // the value it replaces. Unknown fields are ignored for forward compatibility.
@@ -621,7 +623,7 @@ fn parse_key_file_fields(data: &str) -> Result<KeyFileFields, CryptoError> {
         || priv_x25519.is_empty()
         || priv_mlkem768_seed.is_empty()
     {
-        return Err(CryptoError::InvalidKeyLength);
+        return Err(CryptoError::InvalidPrivateKey);
     }
 
     Ok(KeyFileFields {
