@@ -459,15 +459,14 @@ pub fn decrypt_bytes_typed(
             DecryptedContent::Json(value)
         }
         FileFormat::Yaml => {
-            let value: serde_norway::Value = serde_norway::from_slice(&decrypted_bytes)
-                .map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
+            let value: serde_norway::Value =
+                serde_norway::from_slice(&decrypted_bytes).map_err(yaml::invalid_yaml)?;
             DecryptedContent::Yaml(value)
         }
         FileFormat::Toml => {
             let s = std::str::from_utf8(&decrypted_bytes)
                 .map_err(|e| TomlError::InvalidToml(e.to_string()))?;
-            let value: ::toml::Value =
-                ::toml::from_str(s).map_err(|e| TomlError::InvalidToml(e.to_string()))?;
+            let value = toml::parse_value(s)?;
             DecryptedContent::Toml(value)
         }
     };
@@ -528,15 +527,14 @@ pub fn decrypt_file_typed<P: AsRef<Path>>(
             DecryptedContent::Json(value)
         }
         FileFormat::Yaml => {
-            let value: serde_norway::Value = serde_norway::from_slice(&decrypted_bytes)
-                .map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
+            let value: serde_norway::Value =
+                serde_norway::from_slice(&decrypted_bytes).map_err(yaml::invalid_yaml)?;
             DecryptedContent::Yaml(value)
         }
         FileFormat::Toml => {
             let s = std::str::from_utf8(&decrypted_bytes)
                 .map_err(|e| TomlError::InvalidToml(e.to_string()))?;
-            let value: ::toml::Value =
-                ::toml::from_str(s).map_err(|e| TomlError::InvalidToml(e.to_string()))?;
+            let value = toml::parse_value(s)?;
             DecryptedContent::Toml(value)
         }
     };
