@@ -174,27 +174,38 @@ fn validate_path(path: &Path) -> Result<(), EjsonError> {
         ));
     }
 
-    // On Unix, check if it's a device file. This follows symlinks, so a link to
-    // a device is caught too, and runs before `open` because opening a FIFO
-    // blocks. `open_regular_file` re-checks the opened handle.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::FileTypeExt;
-        if let Ok(metadata) = fs::metadata(path) {
-            let file_type = metadata.file_type();
-            if file_type.is_block_device()
-                || file_type.is_char_device()
-                || file_type.is_fifo()
-                || file_type.is_socket()
-            {
-                return Err(EjsonError::InvalidPath(
-                    "path is not a regular file".to_string(),
-                ));
-            }
+    // Reject anything that isn't a regular file. This follows symlinks, so a
+    // link to a device is caught too, and runs before `open` because opening a
+    // FIFO blocks. `open_regular_file` re-checks the opened handle.
+    if let Ok(metadata) = fs::metadata(path) {
+        // Checked here as well as after opening: on Windows a directory can't
+        // be opened as a file, which would otherwise surface as a confusing
+        // "permission denied".
+        let is_special = metadata.is_dir() || is_device_fifo_or_socket(&metadata);
+
+        if is_special {
+            return Err(EjsonError::InvalidPath(
+                "path is not a regular file".to_string(),
+            ));
         }
     }
 
     Ok(())
+}
+
+#[cfg(unix)]
+fn is_device_fifo_or_socket(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    let file_type = metadata.file_type();
+    file_type.is_block_device()
+        || file_type.is_char_device()
+        || file_type.is_fifo()
+        || file_type.is_socket()
+}
+
+#[cfg(not(unix))]
+fn is_device_fifo_or_socket(_metadata: &fs::Metadata) -> bool {
+    false
 }
 
 /// Open `path` and check that the opened handle is a regular file within the
