@@ -261,32 +261,148 @@ fn encrypt_data<W: Write>(
 /// - `.etoml` or `.toml` -> TOML format
 /// - `.eyaml`, `.eyml`, `.yaml`, or `.yml` -> YAML format
 ///
-/// Security: Uses exclusive file locking to prevent race conditions.
+/// Security: Uses exclusive file locking to prevent race conditions, and
+/// replaces the file atomically (write to a temporary file, then rename), so a
+/// crash or full disk can never leave it truncated or half-written.
 pub fn encrypt_file_in_place<P: AsRef<Path>>(file_path: P) -> Result<usize, EjsonError> {
     let file_path = file_path.as_ref();
     let format = FileFormat::from_path(file_path)?;
 
-    // Open file for reading first to get lock
-    let (file, metadata) = open_regular_file(file_path, MAX_FILE_SIZE)?;
-    let permissions = metadata.permissions();
+    // Replace the symlink's target, not the symlink itself.
+    let file_path = &fs::canonicalize(file_path)?;
 
-    // Acquire exclusive lock
-    file.lock()?;
-
-    // Read the data while holding the lock
-    let reader = std::io::BufReader::new(&file);
-    let data = read_to_end_limited(reader, MAX_FILE_SIZE, metadata.len())?;
+    let (file, metadata, data) = lock_and_read_for_update(file_path)?;
 
     // Encrypt
     let mut output = Vec::new();
     let size = encrypt_data(&data, &mut output, format)?;
 
-    // Write back (still holding lock via the open file handle)
-    fs::write(file_path, &output)?;
-    fs::set_permissions(file_path, permissions)?;
+    // Nothing new to encrypt: leave the file untouched.
+    if output != data {
+        replace_file_atomically(file_path, &output, &metadata)?;
+    }
 
     // Lock is released when file is dropped
+    drop(file);
     Ok(size)
+}
+
+/// Open `path`, take an exclusive lock and read it.
+///
+/// Because [`replace_file_atomically`] swaps in a new inode, a process that
+/// was waiting for the lock may end up holding a lock on the old, replaced
+/// file. In that case the path is opened again, so every writer sees the
+/// latest contents.
+fn lock_and_read_for_update(path: &Path) -> Result<(File, fs::Metadata, Vec<u8>), EjsonError> {
+    const MAX_ATTEMPTS: usize = 8;
+
+    for _ in 0..MAX_ATTEMPTS {
+        let (file, _) = open_regular_file(path, MAX_FILE_SIZE)?;
+        file.lock()?;
+
+        // Re-read metadata under the lock; size or mode may have changed.
+        let metadata = file.metadata()?;
+        if !is_same_file(&metadata, &fs::metadata(path)?) {
+            continue;
+        }
+
+        let reader = std::io::BufReader::new(&file);
+        let data = read_to_end_limited(reader, MAX_FILE_SIZE, metadata.len())?;
+        return Ok((file, metadata, data));
+    }
+
+    Err(EjsonError::Io(std::io::Error::other(
+        "file kept being replaced while waiting for its lock",
+    )))
+}
+
+#[cfg(unix)]
+fn is_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a.dev() == b.dev() && a.ino() == b.ino()
+}
+
+#[cfg(not(unix))]
+fn is_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
+    true
+}
+
+/// Replace `path` with `data` by writing a temporary file in the same
+/// directory and renaming it over `path`.
+///
+/// The temporary file gets `original`'s permissions (and, on Unix, its owner
+/// and group where allowed) before the rename, so the replacement is never
+/// more exposed than the file it replaces.
+fn replace_file_atomically(
+    path: &Path,
+    data: &[u8],
+    original: &fs::Metadata,
+) -> Result<(), EjsonError> {
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let name = path
+        .file_name()
+        .ok_or_else(|| EjsonError::InvalidPath("path has no file name".to_string()))?
+        .to_string_lossy();
+
+    let (temp_path, mut temp) = create_temp_file(parent, &name)?;
+
+    let result = (|| -> Result<(), EjsonError> {
+        temp.write_all(data)?;
+        temp.set_permissions(original.permissions())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            // Only root can give a file away; otherwise keep our own ownership.
+            let _ = std::os::unix::fs::fchown(&temp, Some(original.uid()), Some(original.gid()));
+        }
+        temp.sync_all()?;
+        drop(temp);
+        fs::rename(&temp_path, path)?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+        return result;
+    }
+
+    // Persist the rename itself. Best effort: not every platform can open or
+    // sync a directory.
+    #[cfg(unix)]
+    if let Ok(dir) = File::open(parent) {
+        let _ = dir.sync_all();
+    }
+
+    Ok(())
+}
+
+/// Create a new, owner-only temporary file next to the file being replaced.
+fn create_temp_file(dir: &Path, name: &str) -> Result<(std::path::PathBuf, File), EjsonError> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+
+    loop {
+        let unique = format!(
+            ".{name}.ejson-{}-{}.tmp",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let temp_path = dir.join(unique);
+
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+
+        match options.open(&temp_path) {
+            Ok(file) => return Ok((temp_path, file)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
 }
 
 /// Decrypt data from a reader and write to a writer.
@@ -864,6 +980,103 @@ secret: "my secret"
         let encrypted = fs::read_to_string(&eyaml_path).unwrap();
         assert!(encrypted.contains("EJ["));
         assert!(!encrypted.contains("my secret"));
+    }
+
+    fn write_ejson_fixture(dir: &Path) -> (std::path::PathBuf, String) {
+        let kp = Keypair::generate().unwrap();
+        let pub_hex = kp.public_string();
+        fs::write(dir.join(&pub_hex), kp.private_string()).unwrap();
+        let path = dir.join("secrets.ejson");
+        fs::write(
+            &path,
+            format!(r#"{{"_public_key": "{pub_hex}", "secret": "my secret"}}"#),
+        )
+        .unwrap();
+        (path, pub_hex)
+    }
+
+    #[test]
+    fn test_encrypt_in_place_leaves_no_temp_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let (path, _) = write_ejson_fixture(temp_dir.path());
+
+        encrypt_file_in_place(&path).unwrap();
+
+        let leftovers: Vec<_> = fs::read_dir(temp_dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
+        assert!(!fs::read_to_string(&path).unwrap().contains("my secret"));
+    }
+
+    #[test]
+    fn test_encrypt_in_place_failure_keeps_original() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("secrets.ejson");
+        let original = r#"{"_public_key": "not-a-key", "secret": "my secret"}"#;
+        fs::write(&path, original).unwrap();
+
+        assert!(encrypt_file_in_place(&path).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn test_encrypt_in_place_skips_write_when_unchanged() {
+        let temp_dir = TempDir::new().unwrap();
+        let (path, _) = write_ejson_fixture(temp_dir.path());
+
+        encrypt_file_in_place(&path).unwrap();
+        let first = fs::read(&path).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+
+        encrypt_file_in_place(&path).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), first);
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_encrypt_in_place_preserves_mode_and_symlink() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let (path, _) = write_ejson_fixture(temp_dir.path());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
+        let link = temp_dir.path().join("link.ejson");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+
+        encrypt_file_in_place(&link).unwrap();
+
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o640);
+        assert!(!fs::read_to_string(&path).unwrap().contains("my secret"));
+    }
+
+    #[test]
+    fn test_concurrent_encrypt_in_place() {
+        // Writers that waited on the lock of a since-replaced inode must
+        // re-open the path; every run must leave a valid, fully encrypted file.
+        let temp_dir = TempDir::new().unwrap();
+        let (path, pub_hex) = write_ejson_fixture(temp_dir.path());
+
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| encrypt_file_in_place(&path).unwrap());
+            }
+        });
+
+        let out = decrypt_file(&path, temp_dir.path().to_str().unwrap(), "", false).unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert!(out.contains("my secret"));
+        assert!(out.contains(&pub_hex));
     }
 
     #[test]
