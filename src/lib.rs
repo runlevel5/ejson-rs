@@ -360,11 +360,13 @@ fn lock_and_read_for_update(path: &Path) -> Result<(File, fs::Metadata, Vec<u8>)
         let (file, _) = open_regular_file(path, MAX_FILE_SIZE)?;
         file.lock()?;
 
-        // Re-read metadata under the lock; size or mode may have changed.
-        let metadata = file.metadata()?;
-        if !is_same_file(&metadata, &fs::metadata(path)?) {
+        // The file we locked may have been replaced while we waited.
+        if !is_same_file(&file, path)? {
             continue;
         }
+
+        // Re-read metadata under the lock; size or mode may have changed.
+        let metadata = file.metadata()?;
 
         let reader = std::io::BufReader::new(&file);
         let data = read_to_end_limited(reader, MAX_FILE_SIZE, metadata.len())?;
@@ -376,15 +378,28 @@ fn lock_and_read_for_update(path: &Path) -> Result<(File, fs::Metadata, Vec<u8>)
     )))
 }
 
+/// Whether the open `file` is still the file that `path` names.
 #[cfg(unix)]
-fn is_same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+fn is_same_file(file: &File, path: &Path) -> std::io::Result<bool> {
     use std::os::unix::fs::MetadataExt;
-    a.dev() == b.dev() && a.ino() == b.ino()
+    let (open, named) = (file.metadata()?, fs::metadata(path)?);
+    Ok(open.dev() == named.dev() && open.ino() == named.ino())
 }
 
-#[cfg(not(unix))]
-fn is_same_file(_a: &fs::Metadata, _b: &fs::Metadata) -> bool {
-    true
+/// Whether the open `file` is still the file that `path` names.
+///
+/// std has no stable way to read a file's identity on Windows, so this uses
+/// `same-file` (volume serial number plus file index).
+#[cfg(windows)]
+fn is_same_file(file: &File, path: &Path) -> std::io::Result<bool> {
+    let open = same_file::Handle::from_file(file.try_clone()?)?;
+    Ok(open == same_file::Handle::from_path(path)?)
+}
+
+/// No way to tell on this platform: assume the file was not replaced.
+#[cfg(not(any(unix, windows)))]
+fn is_same_file(_file: &File, _path: &Path) -> std::io::Result<bool> {
+    Ok(true)
 }
 
 /// Replace `path` with `data` by writing a temporary file in the same
@@ -1443,6 +1458,29 @@ secret: "my secret"
                 "format error: action failed: couldn't decrypt message"
             );
         }
+    }
+
+    #[test]
+    fn test_is_same_file_detects_a_replaced_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("secrets.ejson");
+        fs::write(&path, "original").unwrap();
+        let open = File::open(&path).unwrap();
+        assert!(is_same_file(&open, &path).unwrap());
+
+        // Rewriting in place keeps the same file...
+        fs::write(&path, "rewritten in place").unwrap();
+        assert!(is_same_file(&open, &path).unwrap());
+
+        // ...but replacing it by rename, as `encrypt` does, does not.
+        let replacement = temp_dir.path().join("replacement");
+        fs::write(&replacement, "replaced").unwrap();
+        fs::rename(&replacement, &path).unwrap();
+        assert!(!is_same_file(&open, &path).unwrap());
+
+        // A fresh handle sees the new file.
+        let reopened = File::open(&path).unwrap();
+        assert!(is_same_file(&reopened, &path).unwrap());
     }
 
     #[test]
