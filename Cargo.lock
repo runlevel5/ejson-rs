@@ -404,6 +404,7 @@ dependencies = [
  "hkdf",
  "ml-kem",
  "rayon",
+ "serde",
  "serde_json",
  "serde_norway",
  "sha2",
