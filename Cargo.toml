@@ -21,8 +21,8 @@ zeroize = { version = "1.8", features = ["derive"] }
 # Cryptography (v3 hybrid post-quantum: X25519 + ML-KEM-768 -> HKDF-SHA256 -> XChaCha20-Poly1305)
 ml-kem = { version = "0.3.2", features = ["getrandom", "zeroize"] }
 hkdf = "0.13"
-sha2 = "0.11"
-chacha20poly1305 = { version = "0.11", features = ["getrandom"] }
+sha2 = { version = "0.11", features = ["zeroize"] }
+chacha20poly1305 = { version = "0.11", features = ["getrandom", "zeroize"] }
 x25519-dalek = { version = "3.0", features = ["getrandom", "static_secrets", "zeroize"] }
 
 # CLI

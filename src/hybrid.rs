@@ -233,9 +233,10 @@ impl HybridPrivateKey {
         if priv_x_bytes.len() != HYBRID_X25519_KEY_SIZE {
             return Err(CryptoError::InvalidKeyLength);
         }
-        let mut x25519_private = [0u8; HYBRID_X25519_KEY_SIZE];
+        // Held in `Zeroizing` so the mismatch returns below wipe it too.
+        let mut x25519_private = Zeroizing::new([0u8; HYBRID_X25519_KEY_SIZE]);
         x25519_private.copy_from_slice(&priv_x_bytes);
-        let derived_x_public = X25519Public::from(&StaticSecret::from(x25519_private));
+        let derived_x_public = X25519Public::from(&StaticSecret::from(*x25519_private));
         if derived_x_public.as_bytes() != &public.x25519_public {
             return Err(CryptoError::DecryptionFailed);
         }
@@ -248,17 +249,17 @@ impl HybridPrivateKey {
         if seed_bytes.len() != HYBRID_MLKEM_SEED_SIZE {
             return Err(CryptoError::InvalidKeyLength);
         }
-        let mut mlkem_seed = [0u8; HYBRID_MLKEM_SEED_SIZE];
+        let mut mlkem_seed = Zeroizing::new([0u8; HYBRID_MLKEM_SEED_SIZE]);
         mlkem_seed.copy_from_slice(&seed_bytes);
-        let dk = DecapsulationKey::<MlKem768>::from_seed(Array::from(mlkem_seed));
+        let dk = DecapsulationKey::<MlKem768>::from_seed(Array::from(*mlkem_seed));
         if dk.encapsulation_key().to_bytes().as_slice() != public.mlkem_ek.as_slice() {
             return Err(CryptoError::DecryptionFailed);
         }
 
         Ok(Self {
             public,
-            x25519_private,
-            mlkem_seed,
+            x25519_private: *x25519_private,
+            mlkem_seed: *mlkem_seed,
         })
     }
 
@@ -278,7 +279,9 @@ pub fn generate_hybrid_keypair() -> Result<(HybridPublicKey, HybridPrivateKey), 
 
     let (dk, ek) = MlKem768::generate_keypair();
     let ek_bytes = ek.to_bytes();
-    let mut seed = dk.to_bytes();
+    // `Zeroizing` wipes this copy of the seed once it has been stored in the
+    // private key (a plain overwrite loop can be optimised away).
+    let seed = Zeroizing::new(dk.to_bytes());
 
     let mut public = HybridPublicKey {
         x25519_public: *x_pub.as_bytes(),
@@ -292,8 +295,6 @@ pub fn generate_hybrid_keypair() -> Result<(HybridPublicKey, HybridPrivateKey), 
         mlkem_seed: [0u8; HYBRID_MLKEM_SEED_SIZE],
     };
     private.mlkem_seed.copy_from_slice(seed.as_slice());
-    // Wipe the local copy of the seed now that it lives in the private key struct.
-    seed.iter_mut().for_each(|b| *b = 0);
 
     Ok((public, private))
 }
@@ -334,6 +335,7 @@ impl HybridEncrypter {
 
         // Fresh ML-KEM encapsulation per value.
         let (mlkem_ct, mlkem_shared) = self.peer_mlkem_ek.encapsulate();
+        let mlkem_shared = Zeroizing::new(mlkem_shared);
 
         // The transcript is both the HKDF info and the AEAD AAD; build it once.
         let aad = transcript(&self.peer, eph_public.as_bytes(), mlkem_ct.as_slice());
@@ -397,7 +399,7 @@ impl HybridDecrypter {
 
         let ct_arr: Ciphertext<MlKem768> =
             Array::try_from(&bm.mlkem_ciphertext[..]).map_err(|_| CryptoError::DecryptionFailed)?;
-        let mlkem_shared = self.mlkem_dk.decapsulate(&ct_arr);
+        let mlkem_shared = Zeroizing::new(self.mlkem_dk.decapsulate(&ct_arr));
 
         // The transcript is both the HKDF info and the AEAD AAD; build it once.
         let aad = transcript(
@@ -594,14 +596,18 @@ mod tests {
         generate_hybrid_keypair().unwrap()
     }
 
-    /// Compile-time check that the long-lived decryption secrets wipe
-    /// themselves. This fails to build if the `zeroize` feature of `ml-kem`
-    /// or `x25519-dalek` is ever dropped from Cargo.toml.
+    /// Compile-time check that the types holding key material wipe
+    /// themselves. This fails to build if the `zeroize` feature of `ml-kem`,
+    /// `x25519-dalek`, `chacha20poly1305` or `sha2` is ever dropped from
+    /// Cargo.toml.
     #[test]
-    fn test_decrypter_secrets_zeroize_on_drop() {
+    fn test_key_holding_types_zeroize_on_drop() {
         fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
         assert_zeroize_on_drop::<DecapsulationKey<MlKem768>>();
         assert_zeroize_on_drop::<StaticSecret>();
+        assert_zeroize_on_drop::<EphemeralSecret>();
+        assert_zeroize_on_drop::<XChaCha20Poly1305>();
+        assert_zeroize_on_drop::<Sha256>();
     }
 
     #[test]
