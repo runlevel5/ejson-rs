@@ -135,6 +135,11 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
 
+    // Every command except `encrypt` handles private keys or plaintext.
+    if !matches!(cli.command, Commands::Encrypt { .. }) {
+        disable_core_dumps();
+    }
+
     let result = match cli.command {
         Commands::Keygen {
             keydir,
@@ -179,6 +184,33 @@ fn main() {
     if let Err(e) = result {
         eprintln!("{}", e);
         process::exit(1);
+    }
+}
+
+/// Keep private keys and decrypted secrets out of core dumps.
+///
+/// Zeroizing only wipes the final copy of a buffer, so a crash dump could
+/// still contain key material or plaintext. Best effort: failures are
+/// ignored, since none of this is needed for correctness.
+fn disable_core_dumps() {
+    #[cfg(unix)]
+    {
+        use rustix::process::{Resource, Rlimit, setrlimit};
+        let _ = setrlimit(
+            Resource::Core,
+            Rlimit {
+                current: Some(0),
+                maximum: Some(0),
+            },
+        );
+    }
+
+    // Not dumpable also stops other processes of the same user from
+    // attaching with ptrace or reading /proc/<pid>/mem.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        use rustix::process::{DumpableBehavior, set_dumpable_behavior};
+        let _ = set_dumpable_behavior(DumpableBehavior::NotDumpable);
     }
 }
 
@@ -258,13 +290,15 @@ fn decrypt_action(
         Zeroizing::new(String::new())
     };
 
-    let decrypted = ejson::decrypt_file(
-        file,
-        keydir,
-        &user_supplied_private_key,
-        trim_underscore_prefix,
-    )
-    .map_err(|e| format!("Decryption failed: {e}"))?;
+    let decrypted = Zeroizing::new(
+        ejson::decrypt_file(
+            file,
+            keydir,
+            &user_supplied_private_key,
+            trim_underscore_prefix,
+        )
+        .map_err(|e| format!("Decryption failed: {e}"))?,
+    );
 
     if let Some(out_path) = output {
         // Write decrypted output with restrictive permissions
@@ -404,12 +438,12 @@ mod tests {
     /// Helper to set up a test environment with keypair and encrypted file
     fn setup_test_env() -> (TempDir, TempDir, PathBuf, String) {
         // Generate a keypair
-        let (pub_key, priv_key) = ejson::generate_keypair().unwrap();
+        let (pub_key, priv_key, _) = ejson::generate_keypair_for_scheme("v1").unwrap();
 
         // Create a temporary keydir and write the private key
         let keydir = TempDir::new().unwrap();
         let key_file = keydir.path().join(&pub_key);
-        fs::write(&key_file, &priv_key).unwrap();
+        fs::write(&key_file, priv_key.as_bytes()).unwrap();
 
         // Create a temporary directory for test files
         let temp_dir = TempDir::new().unwrap();

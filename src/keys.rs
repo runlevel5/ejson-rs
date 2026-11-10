@@ -8,7 +8,7 @@
 //! [`AnyEncrypter`]/[`AnyDecrypter`] dispatchers used by the top-level encrypt/decrypt
 //! flows, so the rest of the crate stays scheme-agnostic.
 
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::crypto::{CryptoError, Decrypter, Encrypter, KeyBytes, Keypair};
 use crate::hybrid::{
@@ -91,6 +91,10 @@ impl PublicKey {
 /// A schema-aware private key.
 ///
 /// The hybrid variant is boxed for the same size reason as [`PublicKey`].
+///
+/// Security: [`HybridPrivateKey`] zeroizes itself on drop. Legacy key bytes
+/// are a plain array; [`AnyDecrypter::new`] wipes its copy once the key has
+/// been handed to the decrypter.
 pub enum PrivateKey {
     Legacy(KeyBytes),
     Hybrid(Box<HybridPrivateKey>),
@@ -150,12 +154,19 @@ impl AnyDecrypter {
     /// Build a decrypter from a matching public/private key pair.
     pub fn new(public: &PublicKey, private: PrivateKey) -> Result<Self, CryptoError> {
         match (public, private) {
-            (PublicKey::Legacy(pubk), PrivateKey::Legacy(privk)) => {
+            (PublicKey::Legacy(pubk), PrivateKey::Legacy(mut privk)) => {
                 let kp = Keypair::from_keys(*pubk, privk);
+                // `KeyBytes` is `Copy`: the keypair (zeroized on drop) now
+                // owns the key, so wipe this copy.
+                privk.zeroize();
                 Ok(AnyDecrypter::Legacy(kp.into_decrypter()))
             }
             (PublicKey::Hybrid(_), PrivateKey::Hybrid(privk)) => {
                 Ok(AnyDecrypter::Hybrid(Box::new(HybridDecrypter::new(*privk))))
+            }
+            (_, PrivateKey::Legacy(mut privk)) => {
+                privk.zeroize();
+                Err(CryptoError::DecryptionFailed)
             }
             _ => Err(CryptoError::DecryptionFailed),
         }
@@ -206,17 +217,13 @@ fn parse_legacy_public_key(s: &str) -> Result<KeyBytes, CryptoError> {
 }
 
 fn parse_legacy_private_key(data: &str) -> Result<KeyBytes, CryptoError> {
-    let mut bytes =
+    // `Zeroizing` wipes the decoded copy on return.
+    let bytes =
         Zeroizing::new(hex::decode(data.trim()).map_err(|_| CryptoError::InvalidKeyLength)?);
-    if bytes.len() != 32 {
-        return Err(CryptoError::InvalidKeyLength);
-    }
-    let key: KeyBytes = bytes
+    bytes
         .as_slice()
         .try_into()
-        .map_err(|_| CryptoError::InvalidKeyLength)?;
-    bytes.iter_mut().for_each(|b| *b = 0);
-    Ok(key)
+        .map_err(|_| CryptoError::InvalidKeyLength)
 }
 
 #[cfg(test)]

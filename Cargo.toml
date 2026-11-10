@@ -49,6 +49,10 @@ thiserror = "2.0"
 # Parallelism (optional)
 rayon = { version = "1.10", optional = true }
 
+[target.'cfg(unix)'.dependencies]
+# Process hardening (disable core dumps)
+rustix = { version = "1.1", features = ["process"] }
+
 [features]
 default = []
 parallel = ["rayon"]
