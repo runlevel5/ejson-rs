@@ -60,7 +60,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Run Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
   # `ejson env` output is meant to be eval'd. Check that adversarial values
   # round-trip exactly, and can't inject commands, in every supported shell,
