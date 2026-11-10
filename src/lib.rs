@@ -50,6 +50,10 @@ use zeroize::Zeroizing;
 /// This prevents denial of service through memory exhaustion.
 pub const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
+/// Maximum size of a private key, whether read from the keydir or stdin (64 KiB).
+/// A `v2` key file is about 2 KB; anything far larger is not a key.
+pub const MAX_KEY_FILE_SIZE: u64 = 64 * 1024;
+
 /// Errors that can occur during ejson operations.
 #[derive(Error, Debug)]
 pub enum EjsonError {
@@ -125,11 +129,13 @@ fn validate_path(path: &Path) -> Result<(), EjsonError> {
         ));
     }
 
-    // On Unix, check if it's a device file
+    // On Unix, check if it's a device file. This follows symlinks, so a link to
+    // a device is caught too, and runs before `open` because opening a FIFO
+    // blocks. `open_regular_file` re-checks the opened handle.
     #[cfg(unix)]
     {
         use std::os::unix::fs::FileTypeExt;
-        if let Ok(metadata) = fs::symlink_metadata(path) {
+        if let Ok(metadata) = fs::metadata(path) {
             let file_type = metadata.file_type();
             if file_type.is_block_device()
                 || file_type.is_char_device()
@@ -146,24 +152,53 @@ fn validate_path(path: &Path) -> Result<(), EjsonError> {
     Ok(())
 }
 
-/// Read a file with size limit and locking.
-fn read_file_with_lock(path: &Path) -> Result<Vec<u8>, EjsonError> {
+/// Open `path` and check that the opened handle is a regular file within the
+/// size limit.
+///
+/// The check is made on the handle, not the path, so the path can't be swapped
+/// for something else (e.g. a symlink to `/dev/zero`) between check and use.
+fn open_regular_file(path: &Path, max_size: u64) -> Result<(File, fs::Metadata), EjsonError> {
     validate_path(path)?;
 
     let file = File::open(path)?;
-
-    // Check file size before reading
     let metadata = file.metadata()?;
-    if metadata.len() > MAX_FILE_SIZE {
+    if !metadata.is_file() {
+        return Err(EjsonError::InvalidPath(
+            "path is not a regular file".to_string(),
+        ));
+    }
+    if metadata.len() > max_size {
         return Err(EjsonError::FileTooLarge);
     }
+    Ok((file, metadata))
+}
+
+/// Read to the end of `reader`, failing with `FileTooLarge` once more than
+/// `max_size` bytes have been read instead of buffering without bound.
+fn read_to_end_limited<R: Read>(
+    reader: R,
+    max_size: u64,
+    capacity: u64,
+) -> Result<Vec<u8>, EjsonError> {
+    let mut data = Vec::with_capacity(capacity.min(max_size) as usize);
+    reader.take(max_size + 1).read_to_end(&mut data)?;
+    if data.len() as u64 > max_size {
+        return Err(EjsonError::FileTooLarge);
+    }
+    Ok(data)
+}
+
+/// Read a file with size limit and locking.
+fn read_file_with_lock(path: &Path) -> Result<Vec<u8>, EjsonError> {
+    let (file, metadata) = open_regular_file(path, MAX_FILE_SIZE)?;
 
     // Acquire shared lock for reading
     file.lock_shared()?;
 
-    let mut data = Vec::with_capacity(metadata.len() as usize);
-    let mut reader = std::io::BufReader::new(&file);
-    reader.read_to_end(&mut data)?;
+    // The size limit is enforced while reading too: the file may have grown
+    // since `metadata` was taken.
+    let reader = std::io::BufReader::new(&file);
+    let data = read_to_end_limited(reader, MAX_FILE_SIZE, metadata.len())?;
 
     // Lock is automatically released when file is dropped
     Ok(data)
@@ -177,13 +212,7 @@ fn read_file_with_lock(path: &Path) -> Result<Vec<u8>, EjsonError> {
 /// This function assumes JSON format. For format detection based on file extension,
 /// use `encrypt_file_in_place`.
 pub fn encrypt<R: Read, W: Write>(mut input: R, mut output: W) -> Result<usize, EjsonError> {
-    let mut data = Vec::new();
-    input.read_to_end(&mut data)?;
-
-    // Check size limit
-    if data.len() as u64 > MAX_FILE_SIZE {
-        return Err(EjsonError::FileTooLarge);
-    }
+    let data = read_to_end_limited(&mut input, MAX_FILE_SIZE, 0)?;
 
     encrypt_data(&data, &mut output, FileFormat::Json)
 }
@@ -194,13 +223,7 @@ pub fn encrypt_with_format<R: Read, W: Write>(
     mut output: W,
     format: FileFormat,
 ) -> Result<usize, EjsonError> {
-    let mut data = Vec::new();
-    input.read_to_end(&mut data)?;
-
-    // Check size limit
-    if data.len() as u64 > MAX_FILE_SIZE {
-        return Err(EjsonError::FileTooLarge);
-    }
+    let data = read_to_end_limited(&mut input, MAX_FILE_SIZE, 0)?;
 
     encrypt_data(&data, &mut output, format)
 }
@@ -241,27 +264,18 @@ fn encrypt_data<W: Write>(
 /// Security: Uses exclusive file locking to prevent race conditions.
 pub fn encrypt_file_in_place<P: AsRef<Path>>(file_path: P) -> Result<usize, EjsonError> {
     let file_path = file_path.as_ref();
-    validate_path(file_path)?;
-
     let format = FileFormat::from_path(file_path)?;
 
     // Open file for reading first to get lock
-    let file = File::open(file_path)?;
-
-    // Check file size
-    let metadata = file.metadata()?;
-    if metadata.len() > MAX_FILE_SIZE {
-        return Err(EjsonError::FileTooLarge);
-    }
+    let (file, metadata) = open_regular_file(file_path, MAX_FILE_SIZE)?;
     let permissions = metadata.permissions();
 
     // Acquire exclusive lock
     file.lock()?;
 
     // Read the data while holding the lock
-    let mut data = Vec::with_capacity(metadata.len() as usize);
-    let mut reader = std::io::BufReader::new(&file);
-    reader.read_to_end(&mut data)?;
+    let reader = std::io::BufReader::new(&file);
+    let data = read_to_end_limited(reader, MAX_FILE_SIZE, metadata.len())?;
 
     // Encrypt
     let mut output = Vec::new();
@@ -288,13 +302,7 @@ pub fn decrypt<R: Read, W: Write>(
     keydir: &str,
     user_supplied_private_key: &str,
 ) -> Result<(), EjsonError> {
-    let mut data = Vec::new();
-    input.read_to_end(&mut data)?;
-
-    // Check size limit
-    if data.len() as u64 > MAX_FILE_SIZE {
-        return Err(EjsonError::FileTooLarge);
-    }
+    let data = read_to_end_limited(&mut input, MAX_FILE_SIZE, 0)?;
 
     decrypt_data(
         &data,
@@ -313,13 +321,7 @@ pub fn decrypt_with_format<R: Read, W: Write>(
     user_supplied_private_key: &str,
     format: FileFormat,
 ) -> Result<(), EjsonError> {
-    let mut data = Vec::new();
-    input.read_to_end(&mut data)?;
-
-    // Check size limit
-    if data.len() as u64 > MAX_FILE_SIZE {
-        return Err(EjsonError::FileTooLarge);
-    }
+    let data = read_to_end_limited(&mut input, MAX_FILE_SIZE, 0)?;
 
     decrypt_data(
         &data,
@@ -586,9 +588,6 @@ fn read_private_key_from_disk(
     let keydir_path = Path::new(keydir);
     let key_path = keydir_path.join(&key_id);
 
-    // Validate the constructed path
-    validate_path(&key_path)?;
-
     // Verify the path is still within keydir after resolution
     // This prevents path traversal via a malicious key ID
     if let (Ok(canonical_keydir), Ok(canonical_key_path)) =
@@ -602,19 +601,24 @@ fn read_private_key_from_disk(
 
     // Don't include the full path in messages to avoid information disclosure
     let prefix: String = key_id.chars().take(8).collect();
-
-    let contents = fs::read_to_string(&key_path).map_err(|_| {
+    let key_file_error = || {
         EjsonError::KeyFileError(format!(
             "key file for public key {prefix}... not found or unreadable"
         ))
-    })?;
+    };
+
+    let (file, metadata) = match open_regular_file(&key_path, MAX_KEY_FILE_SIZE) {
+        Ok(opened) => opened,
+        Err(e @ (EjsonError::InvalidPath(_) | EjsonError::FileTooLarge)) => return Err(e),
+        Err(_) => return Err(key_file_error()),
+    };
+    let data = read_to_end_limited(file, MAX_KEY_FILE_SIZE, metadata.len())?;
+    let contents = String::from_utf8(data).map_err(|_| key_file_error())?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Ok(metadata) = fs::metadata(&key_path)
-            && let Some(problem) = key_file_mode_problem(metadata.permissions().mode())
-        {
+        if let Some(problem) = key_file_mode_problem(metadata.permissions().mode()) {
             eprintln!(
                 "ejson: warning: key file for public key {prefix}... is {problem}; \
                  restrict it with `chmod 440` (or `chmod 400`)"
@@ -860,6 +864,73 @@ secret: "my secret"
         let encrypted = fs::read_to_string(&eyaml_path).unwrap();
         assert!(encrypted.contains("EJ["));
         assert!(!encrypted.contains("my secret"));
+    }
+
+    #[test]
+    fn test_read_to_end_limited() {
+        assert_eq!(read_to_end_limited(&b"abc"[..], 3, 0).unwrap(), b"abc");
+        assert!(matches!(
+            read_to_end_limited(&b"abcd"[..], 3, 0),
+            Err(EjsonError::FileTooLarge)
+        ));
+        // An endless reader stops at the limit instead of exhausting memory
+        assert!(matches!(
+            read_to_end_limited(std::io::repeat(0), 1024, 0),
+            Err(EjsonError::FileTooLarge)
+        ));
+    }
+
+    #[test]
+    fn test_open_regular_file_rejects_directories() {
+        let temp_dir = TempDir::new().unwrap();
+        assert!(matches!(
+            open_regular_file(temp_dir.path(), MAX_FILE_SIZE),
+            Err(EjsonError::InvalidPath(_))
+        ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_symlink_to_device_is_rejected() {
+        let temp_dir = TempDir::new().unwrap();
+        let link = temp_dir.path().join("secrets.ejson");
+        std::os::unix::fs::symlink("/dev/zero", &link).unwrap();
+
+        assert!(matches!(
+            decrypt_file(&link, "/nonexistent", "", false),
+            Err(EjsonError::InvalidPath(_))
+        ));
+        assert!(matches!(
+            encrypt_file_in_place(&link),
+            Err(EjsonError::InvalidPath(_))
+        ));
+    }
+
+    #[test]
+    fn test_key_file_must_be_regular_file() {
+        // Only the check on the opened handle catches this: the path is inside
+        // the keydir and is not a device.
+        let keydir = TempDir::new().unwrap();
+        let pubkey = keys::PublicKey::Legacy([7u8; 32]);
+        fs::create_dir(keydir.path().join(pubkey.key_id())).unwrap();
+
+        assert!(matches!(
+            read_private_key_from_disk(&pubkey, keydir.path().to_str().unwrap()),
+            Err(EjsonError::InvalidPath(_))
+        ));
+    }
+
+    #[test]
+    fn test_oversized_key_file_is_rejected() {
+        let keydir = TempDir::new().unwrap();
+        let pubkey = keys::PublicKey::Legacy([7u8; 32]);
+        let big = vec![b'a'; MAX_KEY_FILE_SIZE as usize + 1];
+        fs::write(keydir.path().join(pubkey.key_id()), big).unwrap();
+
+        assert!(matches!(
+            read_private_key_from_disk(&pubkey, keydir.path().to_str().unwrap()),
+            Err(EjsonError::FileTooLarge)
+        ));
     }
 
     #[test]
