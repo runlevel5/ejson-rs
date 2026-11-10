@@ -49,6 +49,10 @@ thiserror = "2.0"
 # Warnings from the library (the CLI prints them to stderr)
 log = "0.4"
 
+[target.'cfg(windows)'.dependencies]
+# File identity (std has no stable API for it on Windows)
+same-file = "1.0"
+
 [target.'cfg(unix)'.dependencies]
 # Process hardening (disable core dumps)
 rustix = { version = "1.1", features = ["process"] }
