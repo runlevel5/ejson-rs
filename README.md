@@ -234,6 +234,7 @@ These rules apply to all formats:
 5. **Underscores don't propagate** — Nested values under `_key` are still encrypted unless they also have underscore prefixes
 6. **Arrays work element-by-element** — String arrays have each element encrypted individually
 7. **Encrypted values are schema-tagged** — legacy values are `EJ[1:<ephemeral public>:<nonce>:<ciphertext>]`; hybrid values are `EJ[2:<ephemeral X25519 public>:<ML-KEM ciphertext>:<nonce>:<ciphertext>]`. Existing `EJ[1:...]` values remain decryptable.
+8. **Damaged encrypted values are an error** — A value that starts with `EJ[` but is not a well-formed encrypted message (a truncated or hand-edited ciphertext, or one written by a newer ejson) makes both `encrypt` and `decrypt` fail, instead of being treated as plaintext
 
 ### Example: TOML
 

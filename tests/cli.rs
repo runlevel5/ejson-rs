@@ -525,6 +525,28 @@ fn decrypt_errors() {
     let output = run_with_stdin(fx.decrypt(&path).arg("--key-from-stdin"), "not-a-key");
     assert_fails_with(&output, "invalid private key");
 
+    // Damaged ciphertext: an extra character makes the value no longer a
+    // well-formed `EJ[...]` message. It must not be printed as if it were
+    // plaintext.
+    let damaged = fs::read_to_string(&path)
+        .unwrap()
+        .replacen("EJ[1:", "EJ[1:A", 1);
+    let damaged_path = fx.dir.path().join("damaged.ejson");
+    fs::write(&damaged_path, &damaged).unwrap();
+    let output = run(&mut fx.decrypt(&damaged_path));
+    assert_fails_with(
+        &output,
+        "starts with `EJ[` but is not a valid encrypted message",
+    );
+    assert!(output.stdout.is_empty());
+    // `encrypt` refuses it too, and leaves the file alone.
+    let output = run(ejson().arg("encrypt").arg(&damaged_path));
+    assert_fails_with(
+        &output,
+        "starts with `EJ[` but is not a valid encrypted message",
+    );
+    assert_eq!(fs::read_to_string(&damaged_path).unwrap(), damaged);
+
     // Tampered ciphertext: change one character of the first value's
     // encrypted payload, keeping it well-formed base64.
     let mut tampered = fs::read_to_string(&path).unwrap();
