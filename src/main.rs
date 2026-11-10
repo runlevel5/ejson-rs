@@ -129,7 +129,34 @@ enum Commands {
     },
 }
 
+/// Prints the library's warnings (see the `log` section of the crate docs)
+/// to stderr as `ejson: warning: ...`.
+struct StderrLogger;
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() <= log::Level::Warn
+    }
+
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            let level = match record.level() {
+                log::Level::Error => "error",
+                _ => "warning",
+            };
+            eprintln!("ejson: {level}: {}", record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
 fn main() {
+    // Cannot fail: no other logger has been installed yet.
+    if log::set_logger(&StderrLogger).is_ok() {
+        log::set_max_level(log::LevelFilter::Warn);
+    }
+
     let cli = Cli::parse();
 
     // Every command handles secrets: private keys (keygen, decrypt, env) or
