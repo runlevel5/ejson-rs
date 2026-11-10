@@ -207,6 +207,21 @@ fn keygen_write_prints_only_the_public_key() {
 }
 
 #[test]
+fn keygen_scheme_accepts_aliases() {
+    for (name, v2) in [
+        ("v1", false),
+        ("legacy", false),
+        ("PQC", true),
+        ("ml-kem", true),
+    ] {
+        let output = run(ejson().args(["keygen", "--scheme", name]));
+        assert_success(&output);
+        let public_key = stdout(&output).lines().nth(1).unwrap().to_string();
+        assert_eq!(public_key.starts_with("v2:"), v2, "{name}");
+    }
+}
+
+#[test]
 fn keygen_pqc_and_alias_generate_a_v2_key() {
     let dir = TempDir::new().unwrap();
     let output = run(ejson().args(["g", "--pqc", "-w", "-k"]).arg(dir.path()));
@@ -223,8 +238,11 @@ fn keygen_pqc_and_alias_generate_a_v2_key() {
 
 #[test]
 fn keygen_rejects_an_unknown_scheme() {
+    // Rejected while parsing arguments, so it is a usage error (exit code 2).
     let output = run(ejson().args(["keygen", "--scheme", "v9"]));
-    assert_fails_with(&output, "unsupported key scheme: v9");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("unsupported key scheme: v9"));
+    assert!(output.stdout.is_empty());
 }
 
 #[test]
