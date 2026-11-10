@@ -121,32 +121,6 @@ pub trait FormatHandler: Send + Sync {
     }
 }
 
-/// Extension trait for working with boxed format handlers.
-///
-/// This allows using `Box<dyn FormatHandler>` with the same ergonomics
-/// as concrete handler types.
-impl FormatHandler for Box<dyn FormatHandler> {
-    fn format_name(&self) -> &'static str {
-        (**self).format_name()
-    }
-
-    fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError> {
-        (**self).extract_public_key_string(data)
-    }
-
-    fn walk(&self, data: &[u8], action: WalkAction<'_>) -> Result<Vec<u8>, FormatError> {
-        (**self).walk(data, action)
-    }
-
-    fn trim_underscore_prefix_from_keys(&self, data: &[u8]) -> Result<Vec<u8>, FormatError> {
-        (**self).trim_underscore_prefix_from_keys(data)
-    }
-
-    fn preprocess(&self, data: &[u8]) -> Result<Vec<u8>, FormatError> {
-        (**self).preprocess(data)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
