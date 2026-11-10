@@ -300,35 +300,10 @@ fn decrypt_action(
     );
 
     if let Some(out_path) = output {
-        // Write decrypted output with restrictive permissions
-        // Use atomic write pattern: write to temp file, then rename
-        // This prevents race conditions and ensures correct permissions
-
-        let parent = out_path.parent().unwrap_or(Path::new("."));
-
-        // Create a temporary file in the same directory for atomic rename
-        let temp_path = parent.join(format!(".ejson_decrypt_{}.tmp", std::process::id()));
-
-        // Write to temp file with restrictive permissions
-        {
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&temp_path)
-                .map_err(|e| format!("Failed to create temporary file: {e}"))?;
-            file.write_all(&decrypted)
-                .map_err(|e| format!("Failed to write temporary file: {e}"))?;
-            file.sync_all()
-                .map_err(|e| format!("Failed to sync temporary file: {e}"))?;
-        }
-
-        // Atomic rename to final destination
-        fs::rename(&temp_path, out_path).map_err(|e| {
-            // Clean up temp file on error
-            let _ = fs::remove_file(&temp_path);
-            format!("Failed to rename temporary file to output: {e}")
-        })?;
+        // Owner-only, written atomically, and no partial copy left behind on
+        // failure.
+        ejson::write_private_file_atomically(out_path, &decrypted)
+            .map_err(|e| format!("Failed to write output file: {e}"))?;
     } else {
         io::stdout()
             .write_all(&decrypted)

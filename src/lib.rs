@@ -343,7 +343,47 @@ fn replace_file_atomically(
     data: &[u8],
     original: &fs::Metadata,
 ) -> Result<(), EjsonError> {
-    let parent = path.parent().unwrap_or(Path::new("."));
+    write_via_temp_file(path, data, |temp| {
+        temp.set_permissions(original.permissions())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            // Only root can give a file away; otherwise keep our own ownership.
+            let _ = std::os::unix::fs::fchown(temp, Some(original.uid()), Some(original.gid()));
+        }
+        Ok(())
+    })
+}
+
+/// Write `data` to `path` so that it is readable only by its owner, creating
+/// or atomically replacing the file.
+///
+/// The data goes to a new owner-only (`0600` on Unix) temporary file in the
+/// same directory, which is synced and then renamed over `path`, so `path` is
+/// never left half-written and never briefly has looser permissions. If
+/// anything fails, the temporary file is removed so no partial copy of `data`
+/// is left on disk. Used by `ejson decrypt -o`.
+///
+/// On non-Unix platforms the file gets the directory's default permissions.
+pub fn write_private_file_atomically<P: AsRef<Path>>(
+    path: P,
+    data: &[u8],
+) -> Result<(), EjsonError> {
+    write_via_temp_file(path.as_ref(), data, |_| Ok(()))
+}
+
+/// Write `data` to an owner-only temporary file next to `path`, call
+/// `prepare` on it, sync it and rename it over `path`. The temporary file is
+/// removed on any failure.
+fn write_via_temp_file(
+    path: &Path,
+    data: &[u8],
+    prepare: impl FnOnce(&File) -> std::io::Result<()>,
+) -> Result<(), EjsonError> {
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
     let name = path
         .file_name()
         .ok_or_else(|| EjsonError::InvalidPath("path has no file name".to_string()))?
@@ -353,13 +393,7 @@ fn replace_file_atomically(
 
     let result = (|| -> Result<(), EjsonError> {
         temp.write_all(data)?;
-        temp.set_permissions(original.permissions())?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            // Only root can give a file away; otherwise keep our own ownership.
-            let _ = std::os::unix::fs::fchown(&temp, Some(original.uid()), Some(original.gid()));
-        }
+        prepare(&temp)?;
         temp.sync_all()?;
         drop(temp);
         fs::rename(&temp_path, path)?;
@@ -381,7 +415,7 @@ fn replace_file_atomically(
     Ok(())
 }
 
-/// Create a new, owner-only temporary file next to the file being replaced.
+/// Create a new, owner-only temporary file next to the file being written.
 fn create_temp_file(dir: &Path, name: &str) -> Result<(std::path::PathBuf, File), EjsonError> {
     use std::sync::atomic::{AtomicU32, Ordering};
     static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -1007,6 +1041,42 @@ secret: "my secret"
         )
         .unwrap();
         (path, pub_hex)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_write_private_file_atomically() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("out.json");
+        fs::write(&path, "old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_private_file_atomically(&path, b"secret").unwrap();
+
+        assert_eq!(fs::read(&path).unwrap(), b"secret");
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "got 0o{mode:o}");
+        assert_eq!(fs::read_dir(temp_dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn test_write_private_file_atomically_cleans_up_on_failure() {
+        // Renaming a file over a non-empty directory fails after the data
+        // has been written; the temporary copy must not be left behind.
+        let temp_dir = TempDir::new().unwrap();
+        let target = temp_dir.path().join("out.json");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("keep"), "x").unwrap();
+
+        assert!(write_private_file_atomically(&target, b"secret").is_err());
+
+        let names: Vec<_> = fs::read_dir(temp_dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("out.json")]);
     }
 
     #[test]
