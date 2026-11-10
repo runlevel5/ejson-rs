@@ -151,9 +151,6 @@ enum CliError {
     #[error("Failed to export environment: {0}")]
     Env(#[source] ejson::env::EnvError),
 
-    #[error("Failed to write output file: {0}")]
-    WriteOutput(#[source] ejson::EjsonError),
-
     #[error("Failed to write to stdout: {0}")]
     Stdout(#[source] io::Error),
 
@@ -351,19 +348,17 @@ fn decrypt_action(
 ) -> Result<(), CliError> {
     let stdin_key = key_from_stdin_if(key_from_stdin)?;
 
-    let decrypted = ejson::decrypt_file(
-        file,
-        key_source(keydir, stdin_key.as_ref()),
-        underscore_prefix(trim_underscore_prefix),
-    )
-    .map_err(CliError::Decrypt)?;
+    let key = key_source(keydir, stdin_key.as_ref());
+    let underscore_prefix = underscore_prefix(trim_underscore_prefix);
 
     if let Some(out_path) = output {
         // Owner-only, written atomically, and no partial copy left behind on
         // failure.
-        ejson::write_private_file_atomically(out_path, &decrypted)
-            .map_err(CliError::WriteOutput)?;
+        ejson::decrypt_file_to(file, out_path, key, underscore_prefix)
+            .map_err(CliError::Decrypt)?;
     } else {
+        let decrypted =
+            ejson::decrypt_file(file, key, underscore_prefix).map_err(CliError::Decrypt)?;
         io::stdout()
             .write_all(&decrypted)
             .map_err(CliError::Stdout)?;
@@ -650,10 +645,6 @@ mod tests {
             (
                 CliError::Env(ejson::env::EnvError::InvalidIdentifier("a b".to_string())),
                 "Failed to export environment: invalid identifier as key in environment: \"a b\"",
-            ),
-            (
-                CliError::WriteOutput(ejson::EjsonError::FileTooLarge),
-                "Failed to write output file: file too large (max 10485760 bytes)",
             ),
             (
                 CliError::Stdout(not_found()),

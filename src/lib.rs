@@ -329,6 +329,10 @@ pub enum EjsonError {
         reason: KeyFileReason,
     },
 
+    /// The decrypted output couldn't be written (see [`decrypt_file_to`]).
+    #[error("couldn't write output file: {0}")]
+    Output(#[source] std::io::Error),
+
     #[error("file too large (max {} bytes)", MAX_FILE_SIZE)]
     FileTooLarge,
 
@@ -680,14 +684,11 @@ fn replace_file_atomically(
 /// same directory, which is synced and then renamed over `path`, so `path` is
 /// never left half-written and never briefly has looser permissions. If
 /// anything fails, the temporary file is removed so no partial copy of `data`
-/// is left on disk. Used by `ejson decrypt -o`.
+/// is left on disk.
 ///
 /// On non-Unix platforms the file gets the directory's default permissions.
-pub fn write_private_file_atomically<P: AsRef<Path>>(
-    path: P,
-    data: &[u8],
-) -> Result<(), EjsonError> {
-    write_via_temp_file(path.as_ref(), data, |_| Ok(()))
+fn write_private_file_atomically(path: &Path, data: &[u8]) -> Result<(), EjsonError> {
+    write_via_temp_file(path, data, |_| Ok(()))
 }
 
 /// Write `data` to an owner-only temporary file next to `path`, call
@@ -840,6 +841,45 @@ pub fn decrypt_file<P: AsRef<Path>>(
     }
 
     Ok(output)
+}
+
+/// Decrypt a file and write the plaintext to `output_path`.
+///
+/// This is [`decrypt_file`] followed by a careful write: the output is
+/// readable only by its owner (`0600` on Unix), and it is written to a
+/// temporary file in the same directory and renamed into place, so
+/// `output_path` is never left half-written and an existing file there is
+/// replaced atomically. If anything fails, no partial copy of the plaintext
+/// is left on disk.
+///
+/// A failure to write is reported as [`EjsonError::Output`], which tells it
+/// apart from a failure to read or decrypt the input.
+///
+/// ```no_run
+/// use ejson::{KeySource, UnderscorePrefix};
+///
+/// ejson::decrypt_file_to(
+///     "secrets.ejson",
+///     "/run/app/secrets.json",
+///     KeySource::keydir("/opt/ejson/keys"),
+///     UnderscorePrefix::Keep,
+/// )?;
+/// # Ok::<(), ejson::EjsonError>(())
+/// ```
+///
+/// On non-Unix platforms the output gets the directory's default permissions.
+pub fn decrypt_file_to<P: AsRef<Path>, Q: AsRef<Path>>(
+    file_path: P,
+    output_path: Q,
+    key: KeySource<'_>,
+    underscore_prefix: UnderscorePrefix,
+) -> Result<(), EjsonError> {
+    let plaintext = decrypt_file(file_path, key, underscore_prefix)?;
+
+    write_private_file_atomically(output_path.as_ref(), &plaintext).map_err(|e| match e {
+        EjsonError::Io(source) => EjsonError::Output(source),
+        other => other,
+    })
 }
 
 /// Decrypt bytes and return the decrypted contents as a typed value.
@@ -1813,6 +1853,64 @@ secret: "my secret"
     }
 
     #[test]
+    fn test_decrypt_file_to() {
+        let temp_dir = TempDir::new().unwrap();
+        let (path, _) = write_ejson_fixture(temp_dir.path());
+        let original = fs::read_to_string(&path).unwrap();
+        encrypt_file_in_place(&path).unwrap();
+        let key = KeySource::Keydir(temp_dir.path());
+        let output = temp_dir.path().join("plain.json");
+
+        // Replaces an existing file, whatever its permissions were.
+        fs::write(&output, "old contents").unwrap();
+        decrypt_file_to(&path, &output, key, UnderscorePrefix::Keep).unwrap();
+        assert_eq!(fs::read_to_string(&output).unwrap(), original);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&output).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "got 0o{mode:o}");
+        }
+
+        let temp_files = || {
+            fs::read_dir(temp_dir.path())
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+                .count()
+        };
+        assert_eq!(temp_files(), 0);
+
+        // If decryption fails, nothing is written.
+        let untouched = temp_dir.path().join("untouched.json");
+        let wrong_key = generate_keypair(Scheme::V1);
+        let result = decrypt_file_to(
+            &path,
+            &untouched,
+            KeySource::PrivateKey(&wrong_key.private_key),
+            UnderscorePrefix::Keep,
+        );
+        assert!(matches!(result, Err(EjsonError::Format(_))));
+        assert!(!untouched.exists());
+
+        // A failure to write is told apart from a failure to decrypt, and
+        // leaves no partial plaintext behind.
+        let blocked = temp_dir.path().join("blocked.json");
+        fs::create_dir(&blocked).unwrap();
+        fs::write(blocked.join("keep"), "x").unwrap();
+        let result = decrypt_file_to(&path, &blocked, key, UnderscorePrefix::Keep);
+        assert!(matches!(result, Err(EjsonError::Output(_))), "{result:?}");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .starts_with("couldn't write output file: ")
+        );
+        assert_eq!(temp_files(), 0);
+    }
+
+    #[test]
     fn test_structured_error_reasons_and_messages() {
         // Messages are unchanged from when these carried pre-formatted text.
         for (reason, message) in [
@@ -1862,7 +1960,7 @@ secret: "my secret"
             Err(EjsonError::InvalidPath(InvalidPathReason::NullByte))
         ));
         assert!(matches!(
-            write_private_file_atomically("/", b"x"),
+            write_private_file_atomically(Path::new("/"), b"x"),
             Err(EjsonError::InvalidPath(InvalidPathReason::NoFileName))
         ));
     }
