@@ -1,6 +1,9 @@
 name: Security audit
 on:
+  # Only main: pushes to PR branches are already audited by `pull_request`
+  # below, and auditing them here too ran the job twice per PR.
   push:
+    branches: [main]
     paths:
       - '**/Cargo.toml'
       - '**/Cargo.lock'
