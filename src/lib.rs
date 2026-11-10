@@ -295,7 +295,7 @@ fn encrypt_data<W: Write>(
     let encrypter = keys::AnyEncrypter::for_public_key(&pubkey)?;
 
     // Create encryption closure
-    let encrypt_fn = |plaintext: &[u8]| encrypter.encrypt(plaintext).map_err(|e| e.to_string());
+    let encrypt_fn = |plaintext: &[u8]| encrypter.encrypt(plaintext);
 
     // Walk and encrypt
     let new_data = handler.walk(&data, &encrypt_fn)?;
@@ -541,7 +541,7 @@ fn decrypt_data<W: Write>(
     // Create decryption closure that conditionally decrypts
     let decrypt_fn = |ciphertext: &[u8]| {
         if boxed_message::is_boxed_message(ciphertext) {
-            decrypter.decrypt(ciphertext).map_err(|e| e.to_string())
+            decrypter.decrypt(ciphertext)
         } else {
             Ok(ciphertext.to_vec())
         }
@@ -1323,6 +1323,45 @@ secret: "my secret"
             decrypt_file(&path, KeySource::PrivateKey(""), false),
             Err(EjsonError::InvalidPrivateKey)
         ));
+    }
+
+    #[test]
+    fn test_decrypt_failure_keeps_the_typed_cause() {
+        use std::error::Error as _;
+
+        // Encrypt each format to one key, then decrypt with another.
+        let other = generate_keypair(Scheme::V1);
+        for (name, doc) in [
+            ("s.ejson", r#"{"_public_key": "PUB", "a": "secret"}"#),
+            ("s.eyaml", "_public_key: PUB\na: secret\n"),
+            ("s.etoml", "_public_key = \"PUB\"\na = \"secret\"\n"),
+        ] {
+            let temp_dir = TempDir::new().unwrap();
+            let kp = generate_keypair(Scheme::V1);
+            let path = temp_dir.path().join(name);
+            fs::write(&path, doc.replace("PUB", &kp.public_key)).unwrap();
+            encrypt_file_in_place(&path).unwrap();
+
+            let err =
+                decrypt_file(&path, KeySource::PrivateKey(&other.private_key), false).unwrap_err();
+
+            // The cause can be matched on, not just read as text...
+            assert!(
+                matches!(
+                    err,
+                    EjsonError::Format(FormatError::ActionFailed(CryptoError::DecryptionFailed))
+                ),
+                "{name}: {err:?}"
+            );
+            // ...is reachable through the standard error chain...
+            let cause = err.source().and_then(|e| e.source()).unwrap();
+            assert_eq!(cause.to_string(), "couldn't decrypt message");
+            // ...and the message users see is unchanged.
+            assert_eq!(
+                err.to_string(),
+                "format error: action failed: couldn't decrypt message"
+            );
+        }
     }
 
     #[test]
