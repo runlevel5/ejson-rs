@@ -26,11 +26,46 @@ pub enum YamlError {
     ActionFailed(String),
 }
 
+/// Build an `InvalidYaml` error that never quotes document values.
+///
+/// Parser errors from `serde_norway` only give a location, but deserialisation
+/// errors echo the offending value (`invalid value: string "hunter2", ...`),
+/// which in an EYAML file is often a plaintext secret. Quoted fragments are
+/// redacted; the rest of the message and the location are kept.
+pub(crate) fn invalid_yaml(err: serde_norway::Error) -> YamlError {
+    YamlError::InvalidYaml(redact_quoted(&err.to_string()))
+}
+
+/// Replace the contents of `"..."` and `` `...` `` fragments with `...`.
+fn redact_quoted(msg: &str) -> String {
+    let mut out = String::with_capacity(msg.len());
+    let mut open: Option<char> = None;
+    for c in msg.chars() {
+        match open {
+            Some(q) if c == q => {
+                out.push_str("...");
+                out.push(c);
+                open = None;
+            }
+            Some(_) => {}
+            None => {
+                out.push(c);
+                if c == '"' || c == '`' {
+                    open = Some(c);
+                }
+            }
+        }
+    }
+    if open.is_some() {
+        out.push_str("...");
+    }
+    out
+}
+
 /// Extract the raw `_public_key` string value from an EYAML document.
 pub fn extract_public_key_string(data: &[u8]) -> Result<String, YamlError> {
     let s = String::from_utf8_lossy(data);
-    let doc: Value =
-        serde_norway::from_str(&s).map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
+    let doc: Value = serde_norway::from_str(&s).map_err(invalid_yaml)?;
 
     let key_value = doc
         .get(PUBLIC_KEY_FIELD)
@@ -82,14 +117,12 @@ where
     /// Walk the YAML data and apply the action to encryptable values.
     pub fn walk(&self, data: &[u8]) -> Result<Vec<u8>, YamlError> {
         let s = String::from_utf8_lossy(data);
-        let mut doc: Value =
-            serde_norway::from_str(&s).map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
+        let mut doc: Value = serde_norway::from_str(&s).map_err(invalid_yaml)?;
 
         // Process the document
         self.walk_value(&mut doc, false)?;
 
-        let output =
-            serde_norway::to_string(&doc).map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
+        let output = serde_norway::to_string(&doc).map_err(invalid_yaml)?;
         Ok(output.into_bytes())
     }
 
@@ -146,13 +179,11 @@ where
 /// The `_public_key` field is excluded from trimming.
 pub fn trim_underscore_prefix_from_keys(data: &[u8]) -> Result<Vec<u8>, YamlError> {
     let s = String::from_utf8_lossy(data);
-    let doc: Value =
-        serde_norway::from_str(&s).map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
+    let doc: Value = serde_norway::from_str(&s).map_err(invalid_yaml)?;
 
     let transformed = transform_yaml_keys(doc);
 
-    let output =
-        serde_norway::to_string(&transformed).map_err(|e| YamlError::InvalidYaml(e.to_string()))?;
+    let output = serde_norway::to_string(&transformed).map_err(invalid_yaml)?;
     Ok(output.into_bytes())
 }
 
@@ -431,5 +462,36 @@ normal: "data"
         assert!(result_str.contains("inner:"));
         assert!(!result_str.contains("_outer"));
         assert!(!result_str.contains("_inner"));
+    }
+
+    #[test]
+    fn test_parse_errors_do_not_quote_values() {
+        let yaml = b"_public_key: abc\npin: !!int hunter2-supersecret\n";
+
+        let errors = [
+            extract_public_key_string(yaml).unwrap_err(),
+            Walker::new(|d| Ok(d.to_vec())).walk(yaml).unwrap_err(),
+            trim_underscore_prefix_from_keys(yaml).unwrap_err(),
+        ];
+
+        for err in errors {
+            let msg = err.to_string();
+            assert!(!msg.contains("hunter2"), "error leaked the secret: {msg}");
+            assert!(msg.contains("line 2"), "error lost its location: {msg}");
+        }
+    }
+
+    #[test]
+    fn test_redact_quoted() {
+        assert_eq!(
+            redact_quoted(r#"invalid value: string "s3cr3t", expected an integer at line 2"#),
+            r#"invalid value: string "...", expected an integer at line 2"#
+        );
+        assert_eq!(redact_quoted("integer `1234` here"), "integer `...` here");
+        assert_eq!(
+            redact_quoted(r#"unterminated "abc"#),
+            r#"unterminated "..."#
+        );
+        assert_eq!(redact_quoted("no quotes"), "no quotes");
     }
 }

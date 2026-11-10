@@ -6,6 +6,8 @@
 //!
 //! The walker uses `toml_edit` to preserve formatting and comments.
 
+use std::ops::Range;
+
 use crate::handler::{FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, WalkAction};
 use thiserror::Error;
 use toml_edit::{DocumentMut, Item, Value};
@@ -26,10 +28,48 @@ pub enum TomlError {
     ActionFailed(String),
 }
 
+/// Build an `InvalidToml` error that never quotes the document.
+///
+/// The `Display` output of `toml` and `toml_edit` errors includes the offending
+/// source line. In an ETOML file that line is often a plaintext secret, and
+/// when re-parsing decrypted output it is a decrypted one, so only the message
+/// and the line/column are reported.
+pub(crate) fn invalid_toml(src: &str, message: &str, span: Option<Range<usize>>) -> TomlError {
+    let message = message.trim();
+    let Some(span) = span else {
+        return TomlError::InvalidToml(message.to_string());
+    };
+
+    let start = span.start.min(src.len());
+    let before = &src.as_bytes()[..start];
+    let line = before.iter().filter(|&&b| b == b'\n').count() + 1;
+    let line_start = before
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map_or(0, |p| p + 1);
+    let column = src
+        .get(line_start..start)
+        .map_or(start - line_start, |s| s.chars().count())
+        + 1;
+
+    TomlError::InvalidToml(format!("{message} at line {line}, column {column}"))
+}
+
+/// Parse TOML into a `toml::Value`, with errors that don't quote the document.
+pub(crate) fn parse_value(src: &str) -> Result<toml::Value, TomlError> {
+    toml::from_str(src).map_err(|e| invalid_toml(src, e.message(), e.span()))
+}
+
+/// Parse TOML into an editable document, with errors that don't quote it.
+fn parse_document(src: &str) -> Result<DocumentMut, TomlError> {
+    src.parse::<DocumentMut>()
+        .map_err(|e| invalid_toml(src, e.message(), e.span()))
+}
+
 /// Extract the raw `_public_key` string value from an ETOML document.
 pub fn extract_public_key_string(data: &[u8]) -> Result<String, TomlError> {
     let s = String::from_utf8_lossy(data);
-    let doc: toml::Value = toml::from_str(&s).map_err(|e| TomlError::InvalidToml(e.to_string()))?;
+    let doc = parse_value(&s)?;
 
     let key_value = doc
         .get(PUBLIC_KEY_FIELD)
@@ -81,9 +121,7 @@ where
     /// Walk the TOML data and apply the action to encryptable values.
     pub fn walk(&self, data: &[u8]) -> Result<Vec<u8>, TomlError> {
         let s = String::from_utf8_lossy(data);
-        let mut doc: DocumentMut = s
-            .parse()
-            .map_err(|e: toml_edit::TomlError| TomlError::InvalidToml(e.to_string()))?;
+        let mut doc = parse_document(&s)?;
 
         // Process all items in the document
         self.walk_table(doc.as_table_mut())?;
@@ -158,9 +196,7 @@ where
 /// The `_public_key` field is excluded from trimming.
 pub fn trim_underscore_prefix_from_keys(data: &[u8]) -> Result<Vec<u8>, TomlError> {
     let s = String::from_utf8_lossy(data);
-    let mut doc: DocumentMut = s
-        .parse()
-        .map_err(|e: toml_edit::TomlError| TomlError::InvalidToml(e.to_string()))?;
+    let mut doc = parse_document(&s)?;
 
     transform_toml_table_keys(doc.as_table_mut());
 
@@ -456,5 +492,35 @@ normal = "data"
         assert!(result_str.contains("inner = "));
         assert!(!result_str.contains("_outer"));
         assert!(!result_str.contains("_inner"));
+    }
+
+    #[test]
+    fn test_parse_errors_do_not_quote_the_document() {
+        let toml = "_public_key = \"abc\"\npassword = \"hunter2-supersecret\" oops\n";
+
+        let errors = [
+            extract_public_key_string(toml.as_bytes()).unwrap_err(),
+            Walker::new(|d| Ok(d.to_vec()))
+                .walk(toml.as_bytes())
+                .unwrap_err(),
+            trim_underscore_prefix_from_keys(toml.as_bytes()).unwrap_err(),
+        ];
+
+        for err in errors {
+            let msg = err.to_string();
+            assert!(!msg.contains("hunter2"), "error leaked the secret: {msg}");
+            assert!(msg.contains("line 2"), "error lost its location: {msg}");
+        }
+    }
+
+    #[test]
+    fn test_invalid_toml_location() {
+        let src = "a = 1\nb = é x\n";
+        let at = src.find('x').unwrap();
+        let err = invalid_toml(src, "boom\n", Some(at..at + 1));
+        assert_eq!(err.to_string(), "invalid toml: boom at line 2, column 7");
+
+        let err = invalid_toml(src, "boom", None);
+        assert_eq!(err.to_string(), "invalid toml: boom");
     }
 }
