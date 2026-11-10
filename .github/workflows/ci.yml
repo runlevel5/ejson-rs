@@ -82,6 +82,20 @@ jobs:
       - name: Round-trip values through ejson env
         run: python3 -I tests/shell_roundtrip.py target/release/ejson "$RUNNER_TEMP/shell-roundtrip"
 
+  # Licenses, banned/duplicate crates and dependency sources (crates.io only).
+  # Advisories are covered by the "Security audit" workflow.
+  deny:
+    name: Dependency policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check bans licenses sources
+
   fmt:
     name: Format
     runs-on: ubuntu-latest

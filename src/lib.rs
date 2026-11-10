@@ -1,3 +1,8 @@
+// No `unsafe` in the library. Tests may opt in locally (environment variable
+// mutation is `unsafe` in edition 2024), so they get `deny` instead of `forbid`.
+#![cfg_attr(not(test), forbid(unsafe_code))]
+#![cfg_attr(test, deny(unsafe_code))]
+
 //! EJSON - Encrypted JSON secrets management.
 //!
 //! This crate provides utilities for managing encrypted secrets in source control
