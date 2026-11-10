@@ -198,10 +198,13 @@ multiple processes attempt to encrypt the same file.
 Maximum file size is limited to 10 MB to prevent denial of service through
 memory exhaustion.
 .IP \(bu 2
-Path traversal attacks are prevented through validation (no device files,
-FIFOs, or sockets are allowed).
+Only regular files are encrypted: device files, FIFOs and sockets are
+rejected, including through symlinks.
 .IP \(bu 2
-The file's original permissions are preserved after encryption.
+The file is replaced atomically (written to a temporary file in the same
+directory, then renamed), so an interrupted run never leaves it truncated.
+Its original permissions are preserved; a symlink is followed and its target
+is replaced.
 .IP \(bu 2
 Encrypted files are safe to commit to version control. Only the public key
 is needed for encryption; the private key is only needed for decryption.

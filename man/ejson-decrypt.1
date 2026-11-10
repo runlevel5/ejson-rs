@@ -201,8 +201,9 @@ instead for secure key handling.
 Be cautious when decrypting to stdout in shared environments, as the output
 may be captured in terminal scrollback or logs.
 .IP \(bu 2
-Path traversal attacks are prevented through validation (no device files,
-FIFOs, or sockets are allowed).
+Only regular files are read as input or key files: device files, FIFOs and
+sockets are rejected, including through symlinks. Inputs are limited to 10 MB
+and key files to 64 KB.
 .SH TIPS
 .IP \(bu 2
 Use
