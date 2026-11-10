@@ -132,6 +132,47 @@ enum Commands {
     },
 }
 
+/// Everything that can make a command fail. `Display` is the message printed
+/// to stderr before exiting with status 1.
+#[derive(Debug, thiserror::Error)]
+enum CliError {
+    #[error("Failed to create keydir: {0}")]
+    CreateKeydir(#[source] io::Error),
+
+    #[error("Failed to write key file: {0}")]
+    CreateKeyFile(#[source] io::Error),
+
+    #[error("Failed to write key: {0}")]
+    WriteKey(#[source] io::Error),
+
+    #[error("Encryption failed: {0}")]
+    Encrypt(#[source] ejson::EjsonError),
+
+    #[error("Decryption failed: {0}")]
+    Decrypt(#[source] ejson::EjsonError),
+
+    #[error("Failed to export environment: {0}")]
+    Env(#[source] ejson::env::EnvError),
+
+    #[error("Failed to write output file: {0}")]
+    WriteOutput(#[source] ejson::EjsonError),
+
+    #[error("Failed to write to stdout: {0}")]
+    Stdout(#[source] io::Error),
+
+    #[error("Failed to flush output: {0}")]
+    Flush(#[source] io::Error),
+
+    #[error("Failed to read from stdin: {0}")]
+    Stdin(#[source] io::Error),
+
+    #[error(
+        "Private key on stdin is larger than {} bytes",
+        ejson::MAX_KEY_FILE_SIZE
+    )]
+    KeyTooLarge,
+}
+
 /// Prints the library's warnings (see the `log` section of the crate docs)
 /// to stderr as `ejson: warning: ...`.
 struct StderrLogger;
@@ -240,7 +281,7 @@ fn disable_core_dumps() {
     }
 }
 
-fn keygen_action(keydir: &Path, write_flag: bool, scheme: Scheme) -> Result<(), String> {
+fn keygen_action(keydir: &Path, write_flag: bool, scheme: Scheme) -> Result<(), CliError> {
     let GeneratedKeypair {
         public_key: pub_key,
         private_key: priv_key,
@@ -258,7 +299,7 @@ fn keygen_action(keydir: &Path, write_flag: bool, scheme: Scheme) -> Result<(), 
             .recursive(true)
             .mode(0o750)
             .create(keydir)
-            .map_err(|e| format!("Failed to create keydir: {e}"))?;
+            .map_err(CliError::CreateKeydir)?;
 
         // Write private key with restrictive permissions
         // Use create_new(true) to ensure atomic creation with correct permissions
@@ -268,7 +309,7 @@ fn keygen_action(keydir: &Path, write_flag: bool, scheme: Scheme) -> Result<(), 
             .create_new(true)
             .mode(0o440)
             .open(&key_file)
-            .map_err(|e| format!("Failed to write key file: {e}"))?;
+            .map_err(CliError::CreateKeyFile)?;
 
         // Ensure the file ends with exactly one trailing newline (v2 bodies are
         // multi-line). Build the buffer inside Zeroizing so this copy of the private
@@ -279,7 +320,7 @@ fn keygen_action(keydir: &Path, write_flag: bool, scheme: Scheme) -> Result<(), 
             contents.push('\n');
         }
         file.write_all(contents.as_bytes())
-            .map_err(|e| format!("Failed to write key: {e}"))?;
+            .map_err(CliError::WriteKey)?;
 
         println!("{pub_key}");
     } else {
@@ -295,10 +336,9 @@ fn keygen_action(keydir: &Path, write_flag: bool, scheme: Scheme) -> Result<(), 
     Ok(())
 }
 
-fn encrypt_action(files: &[PathBuf]) -> Result<(), String> {
+fn encrypt_action(files: &[PathBuf]) -> Result<(), CliError> {
     for file_path in files {
-        let n = ejson::encrypt_file_in_place(file_path)
-            .map_err(|e| format!("Encryption failed: {e}"))?;
+        let n = ejson::encrypt_file_in_place(file_path).map_err(CliError::Encrypt)?;
 
         println!("Wrote {n} bytes to {}.", file_path.display());
         warn_plaintext_yaml_scalars(file_path);
@@ -340,7 +380,7 @@ fn decrypt_action(
     output: Option<&Path>,
     key_from_stdin: bool,
     trim_underscore_prefix: bool,
-) -> Result<(), String> {
+) -> Result<(), CliError> {
     let stdin_key = key_from_stdin_if(key_from_stdin)?;
 
     let decrypted = Zeroizing::new(
@@ -349,18 +389,18 @@ fn decrypt_action(
             key_source(keydir, stdin_key.as_ref()),
             trim_underscore_prefix,
         )
-        .map_err(|e| format!("Decryption failed: {e}"))?,
+        .map_err(CliError::Decrypt)?,
     );
 
     if let Some(out_path) = output {
         // Owner-only, written atomically, and no partial copy left behind on
         // failure.
         ejson::write_private_file_atomically(out_path, &decrypted)
-            .map_err(|e| format!("Failed to write output file: {e}"))?;
+            .map_err(CliError::WriteOutput)?;
     } else {
         io::stdout()
             .write_all(&decrypted)
-            .map_err(|e| format!("Failed to write to stdout: {e}"))?;
+            .map_err(CliError::Stdout)?;
     }
 
     Ok(())
@@ -368,7 +408,7 @@ fn decrypt_action(
 
 /// The private key from stdin, if `--key-from-stdin` was given. Held in
 /// `Zeroizing` so it is wiped from memory on drop.
-fn key_from_stdin_if(key_from_stdin: bool) -> Result<Option<Zeroizing<String>>, String> {
+fn key_from_stdin_if(key_from_stdin: bool) -> Result<Option<Zeroizing<String>>, CliError> {
     key_from_stdin.then(read_key_from_stdin).transpose()
 }
 
@@ -378,17 +418,14 @@ fn key_source<'a>(keydir: &'a Path, stdin_key: Option<&'a Zeroizing<String>>) ->
 }
 
 /// Read a private key from stdin, refusing input larger than any real key.
-fn read_key_from_stdin() -> Result<Zeroizing<String>, String> {
+fn read_key_from_stdin() -> Result<Zeroizing<String>, CliError> {
     let mut stdin_content = Zeroizing::new(String::new());
     io::stdin()
         .take(ejson::MAX_KEY_FILE_SIZE + 1)
         .read_to_string(&mut stdin_content)
-        .map_err(|e| format!("Failed to read from stdin: {e}"))?;
+        .map_err(CliError::Stdin)?;
     if stdin_content.len() as u64 > ejson::MAX_KEY_FILE_SIZE {
-        return Err(format!(
-            "Private key on stdin is larger than {} bytes",
-            ejson::MAX_KEY_FILE_SIZE
-        ));
+        return Err(CliError::KeyTooLarge);
     }
     Ok(Zeroizing::new(stdin_content.trim().to_string()))
 }
@@ -400,7 +437,7 @@ fn env_action(
     quiet: bool,
     shell: ShellArg,
     trim_underscore_prefix: bool,
-) -> Result<(), String> {
+) -> Result<(), CliError> {
     let stdin_key = key_from_stdin_if(key_from_stdin)?;
 
     // Select the export function based on flags
@@ -424,12 +461,10 @@ fn env_action(
         export_func,
         &mut stdout,
     )
-    .map_err(|e| format!("Failed to export environment: {e}"))?;
+    .map_err(CliError::Env)?;
 
     // Ensure all buffered output is flushed
-    stdout
-        .flush()
-        .map_err(|e| format!("Failed to flush output: {e}"))?;
+    stdout.flush().map_err(CliError::Flush)?;
 
     Ok(())
 }
@@ -605,6 +640,82 @@ mod tests {
 
         let mode = fs::metadata(&key_file).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o440, "got 0o{mode:o}");
+    }
+
+    #[test]
+    fn test_cli_error_messages_and_sources() {
+        use std::error::Error as _;
+
+        // The text printed to stderr is unchanged from when these were
+        // formatted strings.
+        let not_found = || io::Error::from(io::ErrorKind::NotFound);
+        let cases = [
+            (
+                CliError::CreateKeydir(not_found()),
+                "Failed to create keydir: entity not found",
+            ),
+            (
+                CliError::CreateKeyFile(not_found()),
+                "Failed to write key file: entity not found",
+            ),
+            (
+                CliError::WriteKey(not_found()),
+                "Failed to write key: entity not found",
+            ),
+            (
+                CliError::Encrypt(ejson::EjsonError::FileTooLarge),
+                "Encryption failed: file too large (max 10485760 bytes)",
+            ),
+            (
+                CliError::Decrypt(ejson::EjsonError::InvalidPrivateKey),
+                "Decryption failed: invalid private key",
+            ),
+            (
+                CliError::Env(ejson::env::EnvError::InvalidIdentifier("a b".to_string())),
+                "Failed to export environment: invalid identifier as key in environment: \"a b\"",
+            ),
+            (
+                CliError::WriteOutput(ejson::EjsonError::FileTooLarge),
+                "Failed to write output file: file too large (max 10485760 bytes)",
+            ),
+            (
+                CliError::Stdout(not_found()),
+                "Failed to write to stdout: entity not found",
+            ),
+            (
+                CliError::Flush(not_found()),
+                "Failed to flush output: entity not found",
+            ),
+            (
+                CliError::Stdin(not_found()),
+                "Failed to read from stdin: entity not found",
+            ),
+        ];
+        for (error, message) in cases {
+            assert_eq!(error.to_string(), message);
+            // The cause is kept as a typed source, not only as text.
+            assert!(error.source().is_some(), "{message}");
+        }
+
+        assert_eq!(
+            CliError::KeyTooLarge.to_string(),
+            "Private key on stdin is larger than 65536 bytes"
+        );
+    }
+
+    #[test]
+    fn test_actions_return_typed_errors() {
+        let temp_dir = TempDir::new().unwrap();
+        let missing = temp_dir.path().join("missing.ejson");
+
+        assert!(matches!(
+            encrypt_action(std::slice::from_ref(&missing)),
+            Err(CliError::Encrypt(ejson::EjsonError::Io(_)))
+        ));
+        assert!(matches!(
+            decrypt_action(&missing, temp_dir.path(), None, false, false),
+            Err(CliError::Decrypt(ejson::EjsonError::Io(_)))
+        ));
     }
 
     #[test]
