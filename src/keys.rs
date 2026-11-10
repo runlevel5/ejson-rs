@@ -32,7 +32,11 @@ use crate::hybrid::{
 /// assert!("v9".parse::<Scheme>().is_err());
 /// # Ok::<(), ejson::CryptoError>(())
 /// ```
+///
+/// More schemes may be added in a minor release, so a `match` on a `Scheme`
+/// needs a wildcard arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum Scheme {
     /// Legacy NaCl box (Curve25519 + XSalsa20 + Poly1305).
     #[default]
@@ -243,6 +247,10 @@ impl AnyDecrypter {
 /// A freshly generated keypair, in the forms ejson stores them.
 ///
 /// `Debug` output redacts the private key, which is wiped from memory on drop.
+///
+/// Fields may be added in a minor release, so this can't be built with a
+/// struct literal; get one from [`generate_keypair`].
+#[non_exhaustive]
 pub struct GeneratedKeypair {
     /// The scheme the keypair was generated for.
     pub scheme: Scheme,

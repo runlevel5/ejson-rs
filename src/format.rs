@@ -22,7 +22,11 @@ pub enum FileFormatError {
 }
 
 /// Supported file formats for ejson.
+///
+/// More formats may be added in a minor release, so a `match` on a
+/// `FileFormat` needs a wildcard arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum FileFormat {
     /// JSON format (.ejson, .json)
     #[default]
