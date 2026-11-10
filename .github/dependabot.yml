@@ -1,0 +1,23 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      rustcrypto:
+        patterns:
+          - "chacha20*"
+          - "crypto_box"
+          - "ctutils"
+          - "hkdf"
+          - "hybrid-array"
+          - "ml-kem"
+          - "sha2"
+          - "x25519-dalek"
+          - "zeroize"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
