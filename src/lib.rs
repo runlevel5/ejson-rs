@@ -35,6 +35,12 @@
 //! implementations, which compare tags in constant time. ejson itself does no
 //! other secret-dependent comparisons.
 
+// Compile the "2.0" examples in the upgrade guide as doctests, so the guide
+// can't drift from the API.
+#[cfg(doctest)]
+#[doc = include_str!("../UPGRADING.md")]
+struct UpgradingGuide;
+
 /// Declares implementation modules: private, unless the `unstable-internals`
 /// feature is on, which makes them `pub` for the fuzz targets.
 macro_rules! internal_modules {
