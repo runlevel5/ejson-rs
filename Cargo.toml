@@ -39,7 +39,7 @@ toml_edit = "0.25"
 serde_norway = "0.9"
 
 # Encoding
-base64 = "0.22"
+base64 = "0.23"
 hex = "0.4"
 
 # Error handling
