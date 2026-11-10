@@ -12,10 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use ejson::env::{
-    ExportFunction, export_env, export_env_auto, export_env_fish, export_quiet, export_quiet_auto,
-    export_quiet_fish, read_and_export_env,
-};
+use ejson::env::{ExportStyle, Shell, read_and_export_env};
 use ejson::{GeneratedKeypair, KeySource, Scheme};
 use zeroize::Zeroizing;
 
@@ -440,14 +437,15 @@ fn env_action(
 ) -> Result<(), CliError> {
     let stdin_key = key_from_stdin_if(key_from_stdin)?;
 
-    // Select the export function based on flags
-    let export_func: ExportFunction = match (shell, quiet) {
-        (ShellArg::Auto, true) => export_quiet_auto,
-        (ShellArg::Auto, false) => export_env_auto,
-        (ShellArg::Posix, true) => export_quiet,
-        (ShellArg::Posix, false) => export_env,
-        (ShellArg::Fish, true) => export_quiet_fish,
-        (ShellArg::Fish, false) => export_env_fish,
+    let shell = match shell {
+        ShellArg::Auto => Shell::detect(),
+        ShellArg::Posix => Shell::Posix,
+        ShellArg::Fish => Shell::Fish,
+    };
+    let style = if quiet {
+        ExportStyle::Unexported
+    } else {
+        ExportStyle::Exported
     };
 
     // Get stdout handle with buffering for better performance
@@ -458,7 +456,8 @@ fn env_action(
         file,
         key_source(keydir, stdin_key.as_ref()),
         trim_underscore_prefix,
-        export_func,
+        shell,
+        style,
         &mut stdout,
     )
     .map_err(CliError::Env)?;
