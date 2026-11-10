@@ -74,7 +74,7 @@ impl FileFormat {
     /// Get the format handler for this format.
     ///
     /// The handlers are stateless, so this is a shared static reference.
-    pub fn handler(&self) -> &'static dyn FormatHandler {
+    pub(crate) fn handler(self) -> &'static dyn FormatHandler {
         match self {
             FileFormat::Json => &JsonHandler,
             FileFormat::Yaml => &YamlHandler,
@@ -188,13 +188,29 @@ mod tests {
 
     #[test]
     fn test_handler_matches_the_format() {
-        for (format, name) in [
-            (FileFormat::Json, "JSON"),
-            (FileFormat::Yaml, "YAML"),
-            (FileFormat::Toml, "TOML"),
-        ] {
-            assert_eq!(format.handler().format_name(), name);
+        // Each format's handler reads `_public_key` from a document in that
+        // format, and rejects one in another format.
+        let documents = [
+            (FileFormat::Json, r#"{"_public_key": "abc"}"#),
+            (FileFormat::Yaml, "_public_key: abc\nlist:\n  - x\n"),
+            (FileFormat::Toml, "_public_key = \"abc\"\n[table]\n"),
+        ];
+        for (format, document) in documents {
+            let key = format.handler().extract_public_key_string(document.as_bytes());
+            assert_eq!(key.unwrap(), "abc", "{format}");
         }
+        assert!(
+            FileFormat::Json
+                .handler()
+                .extract_public_key_string(documents[2].1.as_bytes())
+                .is_err()
+        );
+        assert!(
+            FileFormat::Toml
+                .handler()
+                .extract_public_key_string(documents[0].1.as_bytes())
+                .is_err()
+        );
     }
 
     #[test]

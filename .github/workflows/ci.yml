@@ -43,6 +43,11 @@ jobs:
       - name: Run tests
         run: cargo test --verbose
 
+      # `unstable-internals` makes the implementation modules public (for the
+      # fuzz targets). Both configurations must build and pass.
+      - name: Run tests (unstable-internals)
+        run: cargo test --verbose --all-features
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
@@ -66,6 +71,9 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Run Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run Clippy (unstable-internals)
         run: cargo clippy --all-targets --all-features -- -D warnings
 
   # `ejson env` output is meant to be eval'd. Check that adversarial values

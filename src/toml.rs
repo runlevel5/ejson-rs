@@ -9,9 +9,7 @@
 use std::ops::Range;
 
 use crate::crypto::CryptoError;
-use crate::handler::{
-    FormatError, FormatHandler, KEY_SIZE, PUBLIC_KEY_FIELD, WalkAction, decode_legacy_public_key,
-};
+use crate::handler::{FormatError, FormatHandler, PUBLIC_KEY_FIELD, WalkAction};
 use toml_edit::{DocumentMut, Item, Value};
 
 /// Build a syntax error that never quotes the document.
@@ -71,12 +69,6 @@ pub fn extract_public_key_string(data: &[u8]) -> Result<String, FormatError> {
         .as_str()
         .map(str::to_string)
         .ok_or(FormatError::PublicKeyInvalid)
-}
-
-/// Extract the _public_key value from an ETOML document as a legacy 32-byte key.
-pub fn extract_public_key(data: &[u8]) -> Result<[u8; KEY_SIZE], FormatError> {
-    let key_str = extract_public_key_string(data)?;
-    decode_legacy_public_key(&key_str).ok_or(FormatError::PublicKeyInvalid)
 }
 
 /// Walker walks a TOML structure, applying an action to encryptable string values.
@@ -290,18 +282,7 @@ fn transform_toml_value_keys(value: &mut Value) {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TomlHandler;
 
-impl TomlHandler {
-    /// Create a new TOML format handler.
-    pub fn new() -> Self {
-        Self
-    }
-}
-
 impl FormatHandler for TomlHandler {
-    fn format_name(&self) -> &'static str {
-        "TOML"
-    }
-
     fn extract_public_key_string(&self, data: &[u8]) -> Result<String, FormatError> {
         extract_public_key_string(data)
     }
@@ -325,9 +306,9 @@ mod tests {
             br#"_public_key = "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
 secret = "value"
 "#;
-        let key = extract_public_key(toml).unwrap();
+        let key = extract_public_key_string(toml).unwrap();
         assert_eq!(
-            hex::encode(key),
+            key,
             "63ccf05a9492e68e12eeb1c705888aebdcc0080af7e594fc402beb24cce9d14f"
         );
     }
@@ -336,7 +317,7 @@ secret = "value"
     fn test_extract_public_key_missing() {
         let toml = br#"secret = "value""#;
         assert!(matches!(
-            extract_public_key(toml),
+            extract_public_key_string(toml),
             Err(FormatError::PublicKeyMissing)
         ));
     }

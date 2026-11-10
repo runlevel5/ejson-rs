@@ -156,11 +156,6 @@ impl HybridPublicKey {
 /// The secret halves can't be read out as bytes;
 /// [`to_file_string`](Self::to_file_string) returns the key as a self-wiping
 /// string for writing to a key file. Both are wiped from memory on drop.
-///
-/// ```compile_fail,E0616
-/// let (_public, private) = ejson::hybrid::generate_hybrid_keypair();
-/// let _seed = private.mlkem_seed; // private field
-/// ```
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct HybridPrivateKey {
     #[zeroize(skip)] // Public key doesn't need zeroizing
@@ -180,11 +175,6 @@ impl fmt::Debug for HybridPrivateKey {
 }
 
 impl HybridPrivateKey {
-    /// The public key this private key belongs to.
-    pub fn public_key(&self) -> &HybridPublicKey {
-        &self.public
-    }
-
     /// Serialize into the `ejson-key v2` private key file body.
     pub fn to_file_string(&self) -> Zeroizing<String> {
         // Hex-encode the secret components into Zeroizing temporaries so their heap
