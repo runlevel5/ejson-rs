@@ -30,6 +30,7 @@ pub type WalkAction<'a> = &'a (dyn Fn(&[u8]) -> Result<Vec<u8>, String> + 'a);
 /// Format-specific handlers can define their own error types that implement
 /// `Into<FormatError>` for integration with the unified error handling.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum FormatError {
     #[error("public key not present in file")]
     PublicKeyMissing,

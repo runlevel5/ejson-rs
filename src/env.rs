@@ -118,6 +118,7 @@ fn is_valid_identifier(s: &str) -> bool {
 
 /// Errors that can occur during env export operations.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum EnvError {
     #[error("environment is not set in ejson/eyaml/etoml")]
     NoEnv,
@@ -127,12 +128,6 @@ pub enum EnvError {
 
     #[error("invalid identifier as key in environment: {0:?}")]
     InvalidIdentifier(String),
-
-    #[error("could not load ejson/eyaml/etoml file: {0}")]
-    LoadError(String),
-
-    #[error("could not load environment from file: {0}")]
-    EnvLoadError(String),
 
     #[error("ejson error: {0}")]
     Ejson(#[from] EjsonError),
@@ -210,7 +205,7 @@ pub fn read_and_export_env<P: AsRef<Path>, W: Write>(
         match read_and_extract_env(&file_path, keydir, private_key, trim_underscore_prefix) {
             Ok(values) => values,
             Err(e) if is_env_error(&e) => SecretEnvMap::new(),
-            Err(e) => return Err(EnvError::EnvLoadError(e.to_string())),
+            Err(e) => return Err(e),
         };
 
     export_func(output, &env_values)
@@ -664,6 +659,24 @@ mod tests {
         let result = String::from_utf8(output).unwrap();
         // Newlines in values should be preserved and properly escaped
         assert!(result.contains("newline"));
+    }
+
+    #[test]
+    fn test_read_and_export_env_returns_the_underlying_error() {
+        let mut output = Vec::new();
+        let err = read_and_export_env(
+            "does-not-exist.ejson",
+            "/nonexistent",
+            "",
+            false,
+            export_env,
+            &mut output,
+        )
+        .unwrap_err();
+
+        // The cause is kept as a typed error, not flattened into a string.
+        assert!(matches!(err, EnvError::Ejson(EjsonError::Io(_))), "{err:?}");
+        assert!(output.is_empty());
     }
 
     #[test]

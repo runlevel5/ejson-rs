@@ -78,6 +78,7 @@ pub const MAX_KEY_FILE_SIZE: u64 = 64 * 1024;
 
 /// Errors that can occur during ejson operations.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum EjsonError {
     #[error("crypto error: {0}")]
     Crypto(#[from] CryptoError),
@@ -102,13 +103,10 @@ pub enum EjsonError {
 
     /// The message says which key (by public key prefix) and why.
     #[error("{0}")]
-    KeyFileError(String),
+    KeyFile(String),
 
     #[error("invalid private key")]
     InvalidPrivateKey,
-
-    #[error("hex decode error: {0}")]
-    HexError(#[from] hex::FromHexError),
 
     #[error("file too large (max {} bytes)", MAX_FILE_SIZE)]
     FileTooLarge,
@@ -753,7 +751,7 @@ fn find_private_key(
     // public contract); a well-formed key that doesn't match the public key surfaces as
     // the underlying crypto error.
     keys::PrivateKey::parse_for_public(pubkey, privkey_string).map_err(|e| match e {
-        CryptoError::InvalidKeyLength => EjsonError::InvalidPrivateKey,
+        CryptoError::InvalidPrivateKey => EjsonError::InvalidPrivateKey,
         other => EjsonError::Crypto(other),
     })
 }
@@ -785,7 +783,7 @@ fn read_private_key_from_disk(
     // Don't include the full path in messages to avoid information disclosure
     let prefix: String = key_id.chars().take(8).collect();
     let key_file_error = |reason: &dyn std::fmt::Display| {
-        EjsonError::KeyFileError(format!(
+        EjsonError::KeyFile(format!(
             "couldn't read key file for public key {prefix}...: {reason}"
         ))
     };
@@ -1273,7 +1271,7 @@ secret: "my secret"
         let pubkey = keys::PublicKey::Legacy([0xab; 32]);
 
         let err = read_private_key_from_disk(&pubkey, keydir.path().to_str().unwrap()).unwrap_err();
-        assert!(matches!(err, EjsonError::KeyFileError(_)));
+        assert!(matches!(err, EjsonError::KeyFile(_)));
 
         let msg = err.to_string();
         assert_eq!(

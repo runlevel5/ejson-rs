@@ -14,6 +14,7 @@ use thiserror::Error;
 
 /// Errors that can occur during YAML processing.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum YamlError {
     #[error("public key not present in EYAML file")]
     PublicKeyMissing,
