@@ -435,7 +435,7 @@ mod tests {
         let json_value = serde_json::json!({
             "_public_key": "abc123"
         });
-        let content = DecryptedContent::Json(json_value);
+        let content = DecryptedContent::from_json(json_value);
         let result = extract_env(&content);
         assert!(matches!(result, Err(EnvError::NoEnv)));
     }
@@ -446,7 +446,7 @@ mod tests {
             "_public_key": "abc123",
             "environment": "not a map"
         });
-        let content = DecryptedContent::Json(json_value);
+        let content = DecryptedContent::from_json(json_value);
         let result = extract_env(&content);
         assert!(matches!(result, Err(EnvError::EnvNotMap)));
     }
@@ -459,7 +459,7 @@ mod tests {
                 "invalid key": "value"
             }
         });
-        let content = DecryptedContent::Json(json_value);
+        let content = DecryptedContent::from_json(json_value);
         let result = extract_env(&content);
         assert!(matches!(result, Err(EnvError::InvalidIdentifier(_))));
     }
@@ -473,7 +473,7 @@ mod tests {
                 "_underscore_key": "underscore_value"
             }
         });
-        let content = DecryptedContent::Json(json_value);
+        let content = DecryptedContent::from_json(json_value);
         let result = extract_env(&content).unwrap();
         assert_eq!(result.get("test_key"), Some("test_value"));
         assert_eq!(result.get("_underscore_key"), Some("underscore_value"));
