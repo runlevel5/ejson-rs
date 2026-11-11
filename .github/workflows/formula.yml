@@ -1,0 +1,74 @@
+name: Homebrew formula
+
+# Install and test the formula with Homebrew itself, on macOS and on Linux
+# (Linuxbrew), whenever it, or the workflow that generates it on release,
+# changes.
+on:
+  pull_request:
+    paths:
+      - 'Formula/**'
+      - '.github/workflows/formula.yml'
+      - '.github/workflows/homebrew-formula.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Formula/**'
+      - '.github/workflows/formula.yml'
+      - '.github/workflows/homebrew-formula.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: 1
+  HOMEBREW_NO_INSTALL_CLEANUP: 1
+  HOMEBREW_NO_ENV_HINTS: 1
+
+jobs:
+  install:
+    name: brew install - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Apple silicon, Intel Linux and ARM Linux: three of the formula's
+        # four archives.
+        os: [macos-latest, ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Homebrew is installed on the Linux runners but not on PATH.
+      - name: Put Homebrew on PATH (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          echo "$HOMEBREW_PREFIX/bin" >> "$GITHUB_PATH"
+
+      # Homebrew only installs formulae that live in a tap.
+      - name: Put the formula in a local tap
+        run: |
+          set -euo pipefail
+          brew tap-new --no-git local/ejson
+          cp Formula/ejson.rb "$(brew --repository local/ejson)/Formula/ejson.rb"
+
+      - name: Install
+        run: brew install local/ejson/ejson
+
+      - name: Test
+        run: brew test local/ejson/ejson
+
+      - name: Check what was installed
+        run: |
+          set -euo pipefail
+          ejson --version
+          # A real round trip with the installed binary.
+          export EJSON_KEYDIR="$RUNNER_TEMP/keys"
+          mkdir -p "$EJSON_KEYDIR"
+          public_key=$(ejson keygen --write)
+          printf '{"_public_key": "%s", "secret": "value"}\n' "$public_key" > "$RUNNER_TEMP/test.ejson"
+          ejson encrypt "$RUNNER_TEMP/test.ejson"
+          grep -q 'EJ\[' "$RUNNER_TEMP/test.ejson"
+          ejson decrypt "$RUNNER_TEMP/test.ejson" | grep -q '"secret": "value"'
