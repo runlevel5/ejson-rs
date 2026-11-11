@@ -35,6 +35,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
+          # Nothing is pushed with git: the commit is made through the API.
+          persist-credentials: false
 
       - name: Download release assets and compute checksums
         id: checksums
@@ -120,14 +122,36 @@ jobs:
           fi
 
           BRANCH="homebrew-formula-v${VERSION}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
-          git add Formula/ejson.rb
-          git commit -m "chore: bump Homebrew formula to v${VERSION}"
-          git push -u origin "$BRANCH" --force
-          gh pr create \
-            --title "chore: bump Homebrew formula to v${VERSION}" \
-            --body "Automated bump of \`Formula/ejson.rb\` to v${VERSION}. Checksums computed directly from the release assets by this workflow." \
-            --base main \
-            --head "$BRANCH"
+          TITLE="chore: bump Homebrew formula to v${VERSION}"
+          BASE_SHA=$(git rev-parse HEAD)
+
+          # Start the branch from main, or reset it there if a previous run
+          # left it behind.
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BRANCH}" > /dev/null 2>&1; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}" \
+              -f sha="$BASE_SHA" -F force=true > /dev/null
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/heads/${BRANCH}" -f sha="$BASE_SHA" > /dev/null
+          fi
+
+          # Commit through the API rather than with `git commit`: GitHub signs
+          # commits made this way, so they show as Verified. A runner has no
+          # key to sign with, and a branch rule that requires signed commits
+          # would otherwise block the pull request.
+          gh api -X PUT "repos/${GITHUB_REPOSITORY}/contents/Formula/ejson.rb" \
+            -f message="$TITLE" \
+            -f branch="$BRANCH" \
+            -f sha="$(git rev-parse HEAD:Formula/ejson.rb)" \
+            -f content="$(base64 -w0 Formula/ejson.rb)" \
+            --jq '"committed \(.commit.sha), verified: \(.commit.verification.verified)"'
+
+          if gh pr view "$BRANCH" > /dev/null 2>&1; then
+            echo "A pull request for $BRANCH already exists; it now has the new commit."
+          else
+            gh pr create \
+              --title "$TITLE" \
+              --body "Automated bump of \`Formula/ejson.rb\` to v${VERSION}. Checksums computed directly from the release assets by this workflow." \
+              --base main \
+              --head "$BRANCH"
+          fi
