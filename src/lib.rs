@@ -219,6 +219,7 @@ internal_modules!(
 
 use std::fs::{self, File};
 use std::io::{Read, Write};
+use std::mem::DropGuard;
 use std::path::Path;
 
 use boxed_message::ValueKind;
@@ -714,21 +715,23 @@ fn write_via_temp_file(
         .ok_or(EjsonError::InvalidPath(InvalidPathReason::NoFileName))?
         .to_string_lossy();
 
-    let (temp_path, mut temp) = create_temp_file(parent, &name)?;
+    let (temp_path, temp) = create_temp_file(parent, &name)?;
 
-    let result = (|| -> Result<(), EjsonError> {
-        temp.write_all(data)?;
-        prepare(&temp)?;
-        temp.sync_all()?;
-        drop(temp);
-        fs::rename(&temp_path, path)?;
-        Ok(())
-    })();
+    // Remove the temporary file unless the rename succeeds, on an error and
+    // on a panic alike.
+    let temp_path = DropGuard::new(temp_path, |temp_path| {
+        let _ = fs::remove_file(temp_path);
+    });
+    // Declared after the guard so that the file is closed before the guard
+    // removes it: Windows may refuse to delete a file that is still open.
+    let mut temp = temp;
 
-    if result.is_err() {
-        let _ = fs::remove_file(&temp_path);
-        return result;
-    }
+    temp.write_all(data)?;
+    prepare(&temp)?;
+    temp.sync_all()?;
+    drop(temp);
+    fs::rename(&*temp_path, path)?;
+    DropGuard::dismiss(temp_path);
 
     // Persist the rename itself. Best effort: not every platform can open or
     // sync a directory.
